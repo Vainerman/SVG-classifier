@@ -17,7 +17,7 @@ TRAIN_YAML = CONFIG_DIR / "train.yaml"
 
 DATA_DIR = LAB_ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"
-MOCK_DIR = DATA_DIR / "mock"
+PROVENANCE_JSONL = DATA_DIR / "provenance.jsonl"
 LICENSES_DIR = DATA_DIR / "licenses"
 
 

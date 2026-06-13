@@ -2,18 +2,22 @@
 # Plan §5.6–5.9. Values here are tunable; preprocess.json and labels.json are NOT
 # (those are the byte-for-byte-shared contract with the extension).
 #
-# `smoke.py` overrides a few of these (epochs, pretrained, augment count) for a
-# fast end-to-end CPU run on mock data.
+# `smoke.py` overrides a few of these (epochs, pretrained, augment count) and
+# subsamples a few classes for a fast end-to-end CPU plumbing run on real data.
 
 data:
-  # Root holding the raw SVG tree: <root>/<library>/<variant-subpath...>/<name>.svg.
-  # Mock data lives in data/mock; real data fetched by scripts/fetch_icons.sh lives in data/raw.
-  raw_root: data/mock
+  # Primary manifest source: the data-collection index (one row per SVG, carrying concept_key).
+  # build_dataset.py reads this and resolves labels off concept_key -> labels.json synonyms,
+  # so label assignment can't drift from the collected data.
+  provenance: data/provenance.jsonl
+  # Raw SVG tree the renderer reads. Gitignored; reproducible via scripts/fetch_icons.sh.
+  raw_root: data/raw
   # Whole libraries withheld from training -> Test-OOD (generalization to unseen styles, plan §5.6).
   ood_libraries: [phosphor]
   # Concepts deliberately excluded from the taxonomy -> the unknown/abstention pool (plan §5.4, §5.6).
-  # These source names are rendered and labeled `unknown` for OOD-detection eval only.
-  unknown_pool_concepts: [star, cloud, bell, lock]
+  # Empty for now: the 271-class taxonomy (built by data/relabel/) leaves a large out-of-taxonomy
+  # "drop" pool; draw a sampled `unknown` set from it when tuning the abstention threshold τ.
+  unknown_pool_concepts: []
   # Split ratios for in-distribution libraries, applied per canonical concept by *source icon*
   # (all augmentations of one source SVG stay together so nothing leaks across splits, plan §5.6).
   split:
@@ -70,7 +74,7 @@ export:
     # PyTorch-float vs ONNX-int8 agreement on Test-ID (plan §5.8 step 3). Release blocker if breached.
     min_top1_agreement: 0.97
     max_logit_mse: 0.05
-    # smoke.py relaxes these — mock data + 1 epoch won't meet real thresholds.
+    # smoke.py relaxes these — a tiny subsample + few epochs won't meet real thresholds.
 
 eval:
   topk: [1, 3]

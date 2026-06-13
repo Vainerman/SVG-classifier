@@ -8,8 +8,8 @@ per split (and especially the would-be Test-Wild):
   - unknown-detection AUROC (max-softmax separating taxonomy vs unknown pool)
 
 Gate release on Test-Wild Top-1 + achievable precision at acceptable coverage,
-not on in-distribution accuracy (plan §5.9). On mock data the numbers are
-meaningless — this exists to prove the metric plumbing.
+not on in-distribution accuracy (plan §5.9). On a tiny smoke subsample the numbers
+are meaningless — this exists to prove the metric plumbing.
 """
 from __future__ import annotations
 

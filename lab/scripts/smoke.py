@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test on mock data — proves the whole lab pipeline wires up
-before the real dataset exists.
+"""End-to-end smoke test on a small real-data subsample — proves the whole lab
+pipeline wires up without rendering all 49k icons.
 
     python scripts/smoke.py
 
-Pipeline: (generate mock data) -> manifest -> splits -> bake (render) -> train a
-few epochs (random init, CPU) -> export int8 ONNX + parity -> evaluate. It writes
-to data/splits/ and artifacts/ and exits non-zero if any stage fails or the
-shipping bundle is missing. Numbers are meaningless on mock data; this checks
-plumbing, not accuracy. Real runs use the per-stage scripts with config/train.yaml.
+Pipeline: provenance manifest -> subsample (a few classes, few icons each) ->
+splits -> bake (render) -> train a few epochs (random init, CPU) -> export int8
+ONNX + parity -> evaluate. Writes to data/splits/ and artifacts/ and exits
+non-zero if any stage fails or the shipping bundle is missing. Numbers are
+meaningless on this tiny subsample; this checks plumbing, not accuracy. Real runs
+use the per-stage scripts (build_dataset/train/export/evaluate) with config/train.yaml.
 """
 from __future__ import annotations
 
@@ -34,6 +35,10 @@ def _set(d: dict, dotted: str, value) -> None:
     node[keys[-1]] = value
 
 
+SMOKE_CLASSES = 12      # use only the first N in-taxonomy labels
+SMOKE_PER_CLASS = 8     # cap source icons per class (keeps rendering fast)
+
+
 def fast_config(base: TrainConfig) -> TrainConfig:
     """A quick CPU-friendly override of train.yaml for the smoke run."""
     cfg = TrainConfig(copy.deepcopy(dict(base)))
@@ -42,10 +47,25 @@ def fast_config(base: TrainConfig) -> TrainConfig:
     _set(cfg, "train.warmup_epochs", 1)
     _set(cfg, "augment.copies_per_train_icon", 4)
     _set(cfg, "export.calibration_samples", 32)
-    # mock data + few epochs can't meet real parity thresholds; relax to prove the gate runs
+    # tiny subsample + few epochs can't meet real parity thresholds; relax to prove the gate runs
     _set(cfg, "export.parity.min_top1_agreement", 0.0)
     _set(cfg, "export.parity.max_logit_mse", 1e9)
     return cfg
+
+
+def _subsample(records, label_map):
+    """Keep the first SMOKE_CLASSES labels (capped at SMOKE_PER_CLASS source icons each)."""
+    keep_labels = set(label_map.names[:SMOKE_CLASSES])
+    per: dict[str, int] = {}
+    out = []
+    for r in records:
+        if r.role != "label" or r.label not in keep_labels:
+            continue
+        if per.get(r.label, 0) >= SMOKE_PER_CLASS:
+            continue
+        per[r.label] = per.get(r.label, 0) + 1
+        out.append(r)
+    return out
 
 
 def main() -> int:
@@ -53,17 +73,11 @@ def main() -> int:
     pp = config.preprocess()
     tcfg = fast_config(config.train_cfg())
 
-    # 0. mock data
-    mock_root = paths.MOCK_DIR
-    if not any(mock_root.rglob("*.svg")):
-        print("[smoke] generating mock data...")
-        import runpy
-        runpy.run_path(str(paths.LAB_ROOT / "scripts" / "make_mock_data.py"), run_name="__main__")
-
     print(f"[smoke] available render backends: {available_backends()}")
 
-    # 1. manifest
-    records = mfst.build_manifest(mock_root, label_map, tcfg)
+    # 1. manifest from the provenance index, subsampled to a few classes
+    prov = paths.resolve(tcfg.get_path("data.provenance", "data/provenance.jsonl"))
+    records = _subsample(mfst.build_manifest_from_provenance(prov, label_map, tcfg), label_map)
     print("[smoke] manifest:", mfst.summarize(records))
     manifest_path = paths.resolve(tcfg.get_path("paths.manifest"))
     mfst.write_csv(records, manifest_path)

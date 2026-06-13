@@ -1,10 +1,11 @@
 # Training & eval pipeline
 
 The §5.5–§5.9 half of the lab: render/augment → fine-tune (`timm`) → ONNX int8
-export with a PyTorch↔ONNX parity gate → full metric suite. Scaffolded with a
-**mock dataset** so the whole chain runs before the real taxonomy is final. The
-data-collection half (`scripts/fetch_icons.sh`, `data/raw/`, `data/provenance.*`,
-`data/concepts.tsv`) is documented in `data/README.md`.
+export with a PyTorch↔ONNX parity gate → full metric suite. Runs on the real
+collected dataset; `scripts/smoke.py` exercises the whole chain on a small
+subsample. The data-collection half (`scripts/fetch_icons.sh`, `data/raw/`,
+`data/provenance.*`, `data/concepts.tsv`) is documented in `data/README.md`, and
+the canonical taxonomy is built from it by `data/relabel/` (see below).
 
 ## The contract with the extension (single source of truth — do not drift)
 
@@ -34,31 +35,48 @@ Renderer extras: `render-chromium` (default, deployment-faithful),
 `render-cairo` (needs `brew install cairo`), `render-svglib` (pure-Python fallback,
 low fidelity). The code auto-falls-back through whatever is installed.
 
-## Prove the plumbing on mock data
+## Prove the plumbing (fast real-data subsample)
 
 ```bash
-python scripts/make_mock_data.py     # tiny synthetic libraries -> data/mock/
-python scripts/smoke.py              # manifest -> render -> train -> export(int8) -> eval
-pytest                               # unit tests (render/export tests skip if deps absent)
+python scripts/smoke.py     # subsample real data -> manifest -> render -> train -> export(int8) -> eval
+pytest                      # unit tests (render/export tests skip if deps absent)
 ```
 
-`smoke.py` runs the full chain (random-init, CPU, a few epochs) and writes the
-shipping bundle to `artifacts/model/`. **Numbers on mock data are meaningless** —
-it verifies wiring, not accuracy.
+`smoke.py` subsamples a few classes from the real data and runs the full chain
+(random-init, CPU, a few epochs), writing the shipping bundle to `artifacts/model/`.
+**Numbers on the subsample are meaningless** — it verifies wiring, not accuracy.
+
+## Building the taxonomy — `config/labels.json` (`data/relabel/`)
+
+The canonical concept set is derived from the collected data, not hand-written.
+`concept_key` in `provenance.jsonl` is granular (~13.7k keys; synonyms like
+`magnifying-glass`/`search` stay separate), so a relabel pipeline canonicalizes
+them into screen-reader labels, then a support floor selects the trained classes:
+
+```bash
+python data/relabel/build_inventory.py        # provenance -> inventory.jsonl (per concept_key)
+python data/relabel/relabel.py                 # local gemma4:e2b: concept_key -> canonical label (concept_labels.jsonl)
+python data/relabel/prep_review.py             # candidate classes -> review/chunk_*.json
+#   -> run Sonnet subagents to audit membership -> review/out_*.json  (kept/evicted/reassigned)
+python data/relabel/apply_review.py --min-svgs 20 --min-libs 2 --write   # -> config/labels.json (271 classes)
+```
+
+The two expensive LLM outputs (`concept_labels.jsonl`, `review/out_*.json`) are
+committed; everything else regenerates. Re-cut the taxonomy size by re-running
+`apply_review.py` with a different floor (`--min-svgs`/`--min-libs`).
 
 ## Run on the real dataset (per stage)
 
-`data/raw/` is already populated by `fetch_icons.sh`. Before training for real,
-extend `config/labels.json` (the canonical concept set) and, if needed,
-`iconlab/taxonomy.py` to map the real library names; seed it from
-`data/concepts.tsv`. Then set `data.raw_root: data/raw` in `config/train.yaml`
-(or pass `--raw-root`) and:
+`data/raw/` is populated by `fetch_icons.sh`; `config/train.yaml` already points at
+it (`data.raw_root: data/raw`) and reads `data/provenance.jsonl` as the manifest
+source (labels resolve off `concept_key` → `labels.json` synonyms, so no
+filename-vs-index drift). To train for real:
 
 ```bash
-python scripts/build_dataset.py --raw-root data/raw   # taxonomy-resolved manifest + render + bake splits
-python scripts/train.py                                # -> artifacts/checkpoint.pt
-python scripts/export.py                               # -> artifacts/model/ (int8 + parity gate)
-python scripts/evaluate.py                             # acc / macro-F1 / ECE / risk-coverage / OOD AUROC
+python scripts/build_dataset.py                # provenance-resolved manifest + render + bake splits
+python scripts/train.py                        # -> artifacts/checkpoint.pt
+python scripts/export.py                        # -> artifacts/model/ (int8 + parity gate)
+python scripts/evaluate.py                      # acc / macro-F1 / ECE / risk-coverage / OOD AUROC
 ```
 
 Pick the abstention threshold τ from the risk–coverage table in
@@ -72,8 +90,9 @@ Pick the abstention threshold τ from the risk–coverage table in
 - `data/manifest.csv` — the **training** manifest built by `build_dataset.py`:
   provenance **plus** resolved canonical label and split role. Regenerated, gitignored.
 
-When a provenance loader is wired up, `iconlab/manifest.py` can read
-`provenance.jsonl` instead of walking the tree.
+`iconlab/manifest.py` reads `provenance.jsonl` directly via
+`build_manifest_from_provenance` (resolving labels off `concept_key`); the
+tree-walking `build_manifest` is a fallback for trees without provenance.
 
 ## Splits (plan §5.6)
 

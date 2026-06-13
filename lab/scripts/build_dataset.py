@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Build the dataset: raw SVG tree -> manifest.csv -> baked npz splits.
+"""Build the dataset: provenance index -> manifest.csv -> baked npz splits.
 
-    python scripts/build_dataset.py [--raw-root data/mock] [--backend chromium]
+    python scripts/build_dataset.py [--raw-root data/raw] [--backend chromium]
 
-Runs the full render path (the #1 train/serve-skew lever), so it needs a working
-renderer. Output: data/manifest.csv and data/splits/<split>.npz.
+Reads data/provenance.jsonl (preferred) to resolve labels off concept_key, then
+renders each source SVG from data/raw. Runs the full render path (the #1
+train/serve-skew lever), so it needs a working renderer.
+Output: data/manifest.csv and data/splits/<split>.npz.
 """
 from __future__ import annotations
 
@@ -28,12 +30,17 @@ def main() -> None:
     pp = config.preprocess()
     tcfg = config.train_cfg()
 
-    raw_root = paths.resolve(args.raw_root or tcfg.get_path("data.raw_root", "data/mock"))
+    raw_root = paths.resolve(args.raw_root or tcfg.get_path("data.raw_root", "data/raw"))
     if not raw_root.exists():
-        raise SystemExit(f"raw root {raw_root} does not exist — run scripts/make_mock_data.py "
-                         f"or scripts/fetch_icons.sh first")
+        raise SystemExit(f"raw root {raw_root} does not exist — run scripts/fetch_icons.sh first")
 
-    records = mfst.build_manifest(raw_root, label_map, tcfg)
+    prov = paths.resolve(tcfg.get_path("data.provenance", "data/provenance.jsonl"))
+    if prov.exists():
+        print(f"[build] manifest from provenance index: {prov}")
+        records = mfst.build_manifest_from_provenance(prov, label_map, tcfg)
+    else:
+        print(f"[build] no provenance index at {prov}; walking raw tree {raw_root}")
+        records = mfst.build_manifest(raw_root, label_map, tcfg)
     manifest_path = paths.resolve(tcfg.get_path("paths.manifest", "data/manifest.csv"))
     mfst.write_csv(records, manifest_path)
     print(f"[build] manifest: {manifest_path}")

@@ -19,6 +19,7 @@ dependencies = [
     "timm>=1.0.7",
     "onnx>=1.16",
     "onnxruntime>=1.18",
+    "onnxscript>=0.1",        # required by torch.onnx dynamo exporter (export.py)
 ]
 
 [project.optional-dependencies]

@@ -6,7 +6,7 @@ from iconlab.manifest import Record
 
 def _rec(library, name, label, role, ood=False):
     return Record(
-        rel_path=f"data/mock/{library}/icons/{name}.svg",
+        rel_path=f"data/raw/{library}/icons/{name}.svg",
         library=library, variant="default", original_name=name,
         concept=name, label=label, role=role, is_ood_library=ood,
     )

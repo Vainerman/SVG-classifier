@@ -1,9 +1,11 @@
-"""Build a manifest of source SVGs from a raw icon tree.
+"""Build a manifest of source SVGs.
 
-Raw layout (produced by scripts/fetch_icons.sh for real data, and by
-scripts/make_mock_data.py for mock data):
-
-    <raw_root>/<library>/<variant-subpath...>/<name>.svg
+Primary source is ``data/provenance.jsonl`` (the data-collection index): one row
+per SVG with its authoritative, pre-slugified ``concept_key``. Resolving labels
+off that key — rather than re-deriving a concept from the filename — avoids
+train/serve normalization drift (the data half and the lab agree by construction).
+``build_manifest`` (walking a raw <root>/<library>/.../<name>.svg tree) is kept as
+a fallback for trees without provenance (e.g. ad-hoc fixtures).
 
 Each row records provenance (library, variant, original name) plus the resolved
 canonical label and a *role*:
@@ -15,6 +17,7 @@ OOD-library membership is flagged here; the actual split assignment is in datase
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -81,6 +84,53 @@ def build_manifest(
                 is_ood_library=library in ood_libs,
             )
         )
+    return records
+
+
+def _role_for(concept_key: str, label_map: LabelMap, unknown_concepts: set[str]) -> tuple[str, str]:
+    canonical = canonical_for(concept_key, label_map)
+    if canonical is not None:
+        return "label", canonical
+    if concept_of(concept_key) in unknown_concepts:
+        return "unknown", label_map.unknown_label
+    return "drop", ""
+
+
+def build_manifest_from_provenance(
+    provenance_path: Path,
+    label_map: LabelMap,
+    train_cfg: TrainConfig,
+) -> list[Record]:
+    """Build the manifest from data/provenance.jsonl (the data-collection index).
+
+    Maps each SVG by its ``concept_key`` (already slugified by the data half) — no
+    filename re-parsing, so the label resolution can't drift from the index.
+    """
+    ood_libs = set(train_cfg.get_path("data.ood_libraries", []) or [])
+    unknown_concepts = {concept_of(c) for c in (train_cfg.get_path("data.unknown_pool_concepts", []) or [])}
+
+    records: list[Record] = []
+    with provenance_path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            r = json.loads(line)
+            role, label = _role_for(r["concept_key"], label_map, unknown_concepts)
+            # provenance "path" is relative to data/ (e.g. raw/lucide/icons/home.svg)
+            rel_path = str((paths.DATA_DIR / r["path"]).resolve().relative_to(paths.LAB_ROOT))
+            records.append(
+                Record(
+                    rel_path=rel_path,
+                    library=r["library"],
+                    variant=r.get("variant") or "default",
+                    original_name=r["raw_name"],
+                    concept=r["concept_key"],
+                    label=label,
+                    role=role,
+                    is_ood_library=r["library"] in ood_libs,
+                )
+            )
     return records
 
 

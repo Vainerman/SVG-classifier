@@ -11,7 +11,6 @@ is dropped.
 from __future__ import annotations
 
 import re
-from functools import lru_cache
 
 from .config import LabelMap, labels as _labels
 
@@ -41,14 +40,20 @@ def strip_variants(name: str) -> str:
     return "-".join(parts)
 
 
-@lru_cache(maxsize=1)
 def _name_to_canonical(label_map: LabelMap | None = None) -> dict[str, str]:
+    # Memoize the reverse table ON the LabelMap instance. LabelMap is unhashable (it
+    # has a dict field) so it can't be an lru_cache key; caching on the instance ties
+    # the table's lifetime to it — correct invalidation, no id()-reuse staleness.
     lm = label_map or _labels()
+    cached = getattr(lm, "_canon_table", None)
+    if cached is not None:
+        return cached
     table: dict[str, str] = {}
     for canonical in lm.names:
         table[normalize_name(canonical)] = canonical
         for syn in lm.synonyms.get(canonical, []):
             table[normalize_name(syn)] = canonical
+    object.__setattr__(lm, "_canon_table", table)  # frozen dataclass -> bypass
     return table
 
 
