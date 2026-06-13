@@ -1,0 +1,11 @@
+# Dependencies
+node_modules/
+
+# WXT build output + generated types
+.output/
+.wxt/
+
+# Misc
+*.log
+.DS_Store
+stats.html

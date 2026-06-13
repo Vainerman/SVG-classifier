@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Icon Labeler</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Icon Labeler</h1>
+      <div id="mockBanner" class="mock-banner" hidden>
+        MOCK MODEL — labels are deterministic placeholders, not real predictions.
+      </div>
+    </header>
+
+    <label class="row toggle">
+      <span>Enabled</span>
+      <input type="checkbox" id="enabled" />
+    </label>
+
+    <label class="row toggle">
+      <span>Debug badge (show labeled icons)</span>
+      <input type="checkbox" id="debugBadge" />
+    </label>
+
+    <label class="row">
+      <span>Source attribution</span>
+      <select id="attribution">
+        <option value="suffix">Suffix — "home (auto-labeled)"</option>
+        <option value="roledescription">Role description</option>
+        <option value="none">None — "home"</option>
+      </select>
+    </label>
+
+    <label class="row">
+      <span>Confidence threshold: <output id="thresholdOut">0.55</output></span>
+      <input type="range" id="threshold" min="0" max="1" step="0.05" />
+    </label>
+
+    <section class="stats" aria-label="Statistics for this tab">
+      <div><strong id="statSeen">0</strong><span>seen</span></div>
+      <div><strong id="statLabeled">0</strong><span>labeled</span></div>
+      <div><strong id="statSkipped">0</strong><span>already&nbsp;ok</span></div>
+      <div><strong id="statCache">0</strong><span>cache&nbsp;hits</span></div>
+      <div><strong id="statUnknown">0</strong><span>unknown</span></div>
+    </section>
+
+    <footer>
+      <a id="optionsLink" href="#">Advanced settings</a>
+      <span class="privacy">100% on-device · no network</span>
+    </footer>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

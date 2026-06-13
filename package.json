@@ -1,0 +1,23 @@
+{
+  "name": "icon-labeler",
+  "version": "0.1.0",
+  "description": "Manifest V3 Chrome extension that auto-labels unlabeled SVG icons for screen readers, fully on-device.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "compile": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.270",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8",
+    "wxt": "^0.20.0"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "note": "MOCK taxonomy for the pre-model build. Shared source of truth between the (future) training lab and the extension. Swapping in the real 100-300 label set changes only this file.",
+  "labels": [
+    "home",
+    "search",
+    "menu",
+    "close",
+    "settings",
+    "user",
+    "arrow-right",
+    "arrow-left",
+    "chevron-right",
+    "return",
+    "cart",
+    "heart",
+    "trash",
+    "download",
+    "upload",
+    "edit",
+    "share",
+    "play",
+    "pause",
+    "plus",
+    "check",
+    "info",
+    "warning",
+    "star",
+    "bookmark",
+    "calendar",
+    "mail",
+    "phone",
+    "lock",
+    "filter"
+  ],
+  "synonyms": {
+    "home": ["house"],
+    "return": ["undo", "back"],
+    "trash": ["delete", "bin"],
+    "user": ["account", "profile"],
+    "cart": ["basket", "shopping"]
+  }
+}
