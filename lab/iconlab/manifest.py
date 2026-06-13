@@ -10,7 +10,9 @@ a fallback for trees without provenance (e.g. ad-hoc fixtures).
 Each row records provenance (library, variant, original name) plus the resolved
 canonical label and a *role*:
   - ``label``   : in-taxonomy, used for train/val/test (split decided later)
-  - ``unknown`` : concept in train.yaml unknown_pool -> OOD/abstention negatives
+  - ``unknown`` : OOD/abstention negative — either an explicit train.yaml
+                  unknown_pool concept, or a drop concept sampled into the pool by
+                  ``seed_unknown_from_drop`` (data.unknown_pool_from_drop)
   - ``drop``    : out-of-taxonomy and not a chosen negative -> unused
 OOD-library membership is flagged here; the actual split assignment is in dataset.py.
 """
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import json
+import random
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -84,7 +87,52 @@ def build_manifest(
                 is_ood_library=library in ood_libs,
             )
         )
+    seed_unknown_from_drop(records, label_map, train_cfg)
     return records
+
+
+def seed_unknown_from_drop(
+    records: list[Record], label_map: LabelMap, train_cfg: TrainConfig
+) -> int:
+    """Promote a deterministic sample of out-of-taxonomy ``drop`` concepts to the
+    ``unknown`` role, in place.
+
+    The drop pool is huge (tens of thousands of genuinely unseen glyphs). A
+    sampled, per-concept-capped slice of it seeds the OOD/abstention pool used for
+    unknown-detection AUROC and the risk-coverage τ pick (plan §5.4, §5.9), so that
+    pool isn't empty. No-op unless ``data.unknown_pool_from_drop.enabled``. Honors
+    the explicit ``unknown_pool_concepts`` list independently (those are already
+    role==unknown by the time this runs). Returns the count promoted."""
+    cfg = train_cfg.get_path("data.unknown_pool_from_drop", {}) or {}
+    if not cfg.get("enabled", False):
+        return 0
+    num_concepts = int(cfg.get("num_concepts", 0))
+    if num_concepts <= 0:
+        return 0
+    min_n = int(cfg.get("min_svgs_per_concept", 1))
+    max_n = int(cfg.get("max_svgs_per_concept", 0))  # 0 -> no per-concept cap
+    rng = random.Random(int(cfg.get("seed", 0)))
+
+    by_concept: dict[str, list[int]] = {}
+    for i, r in enumerate(records):
+        if r.role == "drop":
+            by_concept.setdefault(r.concept, []).append(i)
+
+    eligible = sorted(c for c, idxs in by_concept.items() if len(idxs) >= min_n)
+    if not eligible:
+        return 0
+    chosen = rng.sample(eligible, k=min(num_concepts, len(eligible)))
+
+    promoted = 0
+    for concept in sorted(chosen):
+        idxs = sorted(by_concept[concept])
+        if max_n > 0 and len(idxs) > max_n:
+            idxs = sorted(rng.sample(idxs, k=max_n))
+        for i in idxs:
+            records[i].role = "unknown"
+            records[i].label = label_map.unknown_label
+            promoted += 1
+    return promoted
 
 
 def _role_for(concept_key: str, label_map: LabelMap, unknown_concepts: set[str]) -> tuple[str, str]:
@@ -131,6 +179,7 @@ def build_manifest_from_provenance(
                     is_ood_library=r["library"] in ood_libs,
                 )
             )
+    seed_unknown_from_drop(records, label_map, train_cfg)
     return records
 
 
