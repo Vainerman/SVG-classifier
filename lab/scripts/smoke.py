@@ -37,6 +37,7 @@ def _set(d: dict, dotted: str, value) -> None:
 
 SMOKE_CLASSES = 12      # use only the first N in-taxonomy labels
 SMOKE_PER_CLASS = 8     # cap source icons per class (keeps rendering fast)
+SMOKE_UNKNOWN = 16      # keep a few unknown-pool icons so OOD-AUROC plumbing runs
 
 
 def fast_config(base: TrainConfig) -> TrainConfig:
@@ -54,17 +55,22 @@ def fast_config(base: TrainConfig) -> TrainConfig:
 
 
 def _subsample(records, label_map):
-    """Keep the first SMOKE_CLASSES labels (capped at SMOKE_PER_CLASS source icons each)."""
+    """Keep the first SMOKE_CLASSES labels (capped at SMOKE_PER_CLASS source icons
+    each), plus up to SMOKE_UNKNOWN unknown-pool icons so the OOD-AUROC path has
+    data to chew on."""
     keep_labels = set(label_map.names[:SMOKE_CLASSES])
     per: dict[str, int] = {}
+    n_unknown = 0
     out = []
     for r in records:
-        if r.role != "label" or r.label not in keep_labels:
-            continue
-        if per.get(r.label, 0) >= SMOKE_PER_CLASS:
-            continue
-        per[r.label] = per.get(r.label, 0) + 1
-        out.append(r)
+        if r.role == "label" and r.label in keep_labels:
+            if per.get(r.label, 0) >= SMOKE_PER_CLASS:
+                continue
+            per[r.label] = per.get(r.label, 0) + 1
+            out.append(r)
+        elif r.role == "unknown" and n_unknown < SMOKE_UNKNOWN:
+            n_unknown += 1
+            out.append(r)
     return out
 
 

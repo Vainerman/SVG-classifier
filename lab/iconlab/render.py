@@ -21,8 +21,15 @@ from PIL import Image
 
 # ---- svg dimension normalization ----------------------------------------- #
 _SVG_OPEN_RE = re.compile(r"<svg\b[^>]*>", re.IGNORECASE | re.DOTALL)
-_WIDTH_RE = re.compile(r'\bwidth\s*=\s*"[^"]*"', re.IGNORECASE)
-_HEIGHT_RE = re.compile(r'\bheight\s*=\s*"[^"]*"', re.IGNORECASE)
+# Match `width`/`height` only as standalone attributes on the root tag. The
+# negative lookbehind `(?<![-\w:])` is load-bearing: a plain `\b` boundary fires
+# after a hyphen, so `\bwidth=` would match *inside* `stroke-width="2"` and a
+# blind .sub() would shred it to a dangling `stroke-`, yielding an unparseable
+# SVG that Chromium silently fails to decode (img.onerror). Most stroke icon
+# libraries (feather/lucide/tabler) carry `stroke-width` on the root <svg>, so
+# that bug dropped ~20%+ of renders. Require a real attribute boundary instead.
+_WIDTH_RE = re.compile(r'(?<![-\w:])width\s*=\s*"[^"]*"', re.IGNORECASE)
+_HEIGHT_RE = re.compile(r'(?<![-\w:])height\s*=\s*"[^"]*"', re.IGNORECASE)
 
 
 def normalize_svg_dimensions(svg: str, size: int) -> str:
@@ -61,11 +68,19 @@ class Renderer(ABC):
 # --------------------------------------------------------------------------- #
 _CANVAS_JS = """
 async ([svgB64, w, h]) => {
-  const svg = atob(svgB64);
+  // atob yields a binary string of the UTF-8 bytes; unescape(...) maps it back to
+  // the original code points so non-ASCII SVGs round-trip through encodeURIComponent.
+  const svg = decodeURIComponent(escape(atob(svgB64)));
   const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
   const img = new Image();
   img.width = w; img.height = h;
-  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+  // Reject with a real Error (not the bare DOM Event) so a genuine decode failure
+  // is legible instead of surfacing as an opaque "Page.evaluate: Event".
+  await new Promise((res, rej) => {
+    img.onload = () => res();
+    img.onerror = () => rej(new Error('SVG failed to load/decode in Chromium'));
+    img.src = url;
+  });
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');

@@ -15,9 +15,18 @@ data:
   # Whole libraries withheld from training -> Test-OOD (generalization to unseen styles, plan §5.6).
   ood_libraries: [phosphor]
   # Concepts deliberately excluded from the taxonomy -> the unknown/abstention pool (plan §5.4, §5.6).
-  # Empty for now: the 271-class taxonomy (built by data/relabel/) leaves a large out-of-taxonomy
-  # "drop" pool; draw a sampled `unknown` set from it when tuning the abstention threshold τ.
+  # Explicit concept keys listed here are always promoted to the `unknown` role.
   unknown_pool_concepts: []
+  # The 271-class taxonomy (built by data/relabel/) leaves ~34.5k out-of-taxonomy SVGs in the
+  # "drop" pool — genuine unseen glyphs (cookie, rocket, calculator, ...), ideal OOD/abstention
+  # negatives for unknown-detection AUROC and the risk-coverage τ pick (plan §5.4, §5.9). Auto-seed
+  # the unknown pool by sampling distinct drop concepts. Deterministic (seed) so splits reproduce.
+  unknown_pool_from_drop:
+    enabled: true
+    num_concepts: 80          # distinct drop concepts to promote to the unknown pool
+    min_svgs_per_concept: 6   # require a stable count (drops below this are mostly near-dupes/noise)
+    max_svgs_per_concept: 10  # cap per concept so no single glyph dominates the pool
+    seed: 4321
   # Split ratios for in-distribution libraries, applied per canonical concept by *source icon*
   # (all augmentations of one source SVG stay together so nothing leaks across splits, plan §5.6).
   split:

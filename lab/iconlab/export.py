@@ -36,6 +36,17 @@ def load_checkpoint(path: Path, device: str = "cpu") -> tuple[torch.nn.Module, d
     return model, ckpt
 
 
+def _onnx_opset(onnx_path: Path) -> int | None:
+    """The default-domain (ai.onnx) opset of an exported model, or None."""
+    import onnx
+
+    md = onnx.load(str(onnx_path))
+    for op in md.opset_import:
+        if (op.domain or "") in ("", "ai.onnx"):
+            return int(op.version)
+    return None
+
+
 def export_onnx(model: torch.nn.Module, input_size: int, channels: int, out_path: Path, opset: int) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     dummy = torch.zeros(1, channels, input_size, input_size, dtype=torch.float32)
@@ -48,7 +59,21 @@ def export_onnx(model: torch.nn.Module, input_size: int, channels: int, out_path
         dynamic_axes={INPUT_NAME: {0: "batch"}, OUTPUT_NAME: {0: "batch"}},
         opset_version=opset,
         do_constant_folding=True,
+        # Force the legacy TorchScript exporter. The dynamo exporter (the default
+        # since torch 2.x) has a minimum opset of 18; when asked for 17 it warns,
+        # attempts an opset down-conversion that quietly fails, and ships an
+        # opset-18 graph anyway. The legacy path honors opset_version exactly and
+        # emits the conservative op set that onnxruntime-web is validated against.
+        dynamo=False,
     )
+    # Belt-and-suspenders: never silently ship the wrong opset (ORT-Web support is
+    # pinned to export.opset). A mismatch is a release blocker, not a warning.
+    actual = _onnx_opset(out_path)
+    if actual != opset:
+        raise RuntimeError(
+            f"ONNX export opset mismatch: requested {opset}, exporter produced {actual}. "
+            "ORT-Web compatibility is pinned to export.opset in train.yaml; refusing to ship a drifted graph."
+        )
     return out_path
 
 
