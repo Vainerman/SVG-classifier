@@ -1,0 +1,27 @@
+{
+  "total_svgs": 49045,
+  "unique_concept_keys": 13743,
+  "concepts_in_2plus_libraries": 1891,
+  "concepts_in_5plus_libraries": 284,
+  "per_library": {
+    "bootstrap": 2078,
+    "feather": 287,
+    "heroicons": 1288,
+    "iconoir": 1671,
+    "lucide": 1964,
+    "material-symbols": 23310,
+    "phosphor": 9072,
+    "remix": 3229,
+    "tabler": 6146
+  },
+  "per_style": {
+    "duotone": 1512,
+    "filled": 17681,
+    "outline": 29852
+  },
+  "per_license": {
+    "Apache-2.0": 26539,
+    "ISC": 1964,
+    "MIT": 20542
+  }
+}

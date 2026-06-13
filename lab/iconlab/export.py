@@ -1,0 +1,207 @@
+"""torch -> ONNX -> int8, with a PyTorch-vs-ONNX parity gate (plan §5.8).
+
+Steps:
+  1. export the trained model to fp32 ONNX at a conservative opset
+  2. quantize to int8 (static w/ a calibration set, preferred for CNNs; or dynamic)
+  3. parity-check PyTorch-float vs ONNX-int8 logits on Test-ID — top-1 agreement
+     and logit MSE. A breach is a release blocker.
+  4. emit the shipping bundle: icon-classifier.onnx + labels.json + preprocess.json
+     (destined for the extension's public/models/).
+
+The final ORT *Web* (WebGPU/WASM) load test can only run in JS — see README; this
+module verifies the model under Python onnxruntime, which catches most issues.
+"""
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from . import paths
+from .config import LabelMap, PreprocessConfig, TrainConfig
+from .model import build_model
+
+INPUT_NAME = "input"
+OUTPUT_NAME = "logits"
+
+
+def load_checkpoint(path: Path, device: str = "cpu") -> tuple[torch.nn.Module, dict]:
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    model = build_model(ckpt["backbone"], ckpt["num_classes"], pretrained=False)
+    model.load_state_dict(ckpt["state_dict"])
+    model.eval().to(device)
+    return model, ckpt
+
+
+def export_onnx(model: torch.nn.Module, input_size: int, channels: int, out_path: Path, opset: int) -> Path:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    dummy = torch.zeros(1, channels, input_size, input_size, dtype=torch.float32)
+    torch.onnx.export(
+        model,
+        dummy,
+        str(out_path),
+        input_names=[INPUT_NAME],
+        output_names=[OUTPUT_NAME],
+        dynamic_axes={INPUT_NAME: {0: "batch"}, OUTPUT_NAME: {0: "batch"}},
+        opset_version=opset,
+        do_constant_folding=True,
+    )
+    return out_path
+
+
+class _ArrayCalibrationReader:
+    """Feeds normalized calibration batches to onnxruntime static quantization."""
+
+    def __init__(self, x: np.ndarray, batch: int = 32):
+        self._batches = [x[i : i + batch] for i in range(0, len(x), batch)] or [x[:0]]
+        self._i = 0
+
+    def get_next(self):
+        if self._i >= len(self._batches):
+            return None
+        b = self._batches[self._i]
+        self._i += 1
+        return {INPUT_NAME: b.astype(np.float32)}
+
+    def rewind(self):
+        self._i = 0
+
+
+def quantize(
+    fp32_path: Path,
+    int8_path: Path,
+    mode: str,
+    calibration_x: np.ndarray | None,
+) -> Path:
+    from onnxruntime.quantization import QuantType, quantize_dynamic, quantize_static
+    from onnxruntime.quantization import QuantFormat
+
+    # shape-inference / cleanup pre-pass improves quantization robustness
+    src = fp32_path
+    try:
+        from onnxruntime.quantization.shape_inference import quant_pre_process
+
+        pre = fp32_path.with_suffix(".pre.onnx")
+        quant_pre_process(str(fp32_path), str(pre))
+        src = pre
+    except Exception as e:  # noqa: BLE001
+        print(f"[export] quant_pre_process skipped: {e}")
+
+    if mode == "static" and calibration_x is not None and len(calibration_x) > 0:
+        reader = _ArrayCalibrationReader(calibration_x)
+        quantize_static(
+            str(src),
+            str(int8_path),
+            calibration_data_reader=reader,
+            quant_format=QuantFormat.QDQ,
+            per_channel=True,
+            activation_type=QuantType.QInt8,
+            weight_type=QuantType.QInt8,
+        )
+    else:
+        if mode == "static":
+            print("[export] no calibration data -> falling back to dynamic quantization")
+        quantize_dynamic(str(src), str(int8_path), weight_type=QuantType.QInt8)
+    return int8_path
+
+
+def _onnx_logits(onnx_path: Path, x: np.ndarray, batch: int = 64) -> np.ndarray:
+    import onnxruntime as ort
+
+    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    name = sess.get_inputs()[0].name
+    outs = []
+    for i in range(0, len(x), batch):
+        outs.append(sess.run(None, {name: x[i : i + batch].astype(np.float32)})[0])
+    return np.concatenate(outs, axis=0) if outs else np.zeros((0,))
+
+
+@torch.no_grad()
+def _torch_logits(model: torch.nn.Module, x: np.ndarray, batch: int = 64) -> np.ndarray:
+    outs = []
+    for i in range(0, len(x), batch):
+        outs.append(model(torch.from_numpy(x[i : i + batch])).cpu().numpy())
+    return np.concatenate(outs, axis=0) if outs else np.zeros((0,))
+
+
+def parity_check(model: torch.nn.Module, int8_path: Path, x_eval: np.ndarray) -> dict:
+    if len(x_eval) == 0:
+        return {"n": 0, "top1_agreement": float("nan"), "logit_mse": float("nan")}
+    tl = _torch_logits(model, x_eval)
+    ol = _onnx_logits(int8_path, x_eval)
+    agree = float((tl.argmax(1) == ol.argmax(1)).mean())
+    mse = float(np.mean((tl - ol) ** 2))
+    return {"n": int(len(x_eval)), "top1_agreement": agree, "logit_mse": mse}
+
+
+def export(
+    checkpoint_path: Path,
+    train_cfg: TrainConfig,
+    label_map: LabelMap,
+    preprocess_cfg: PreprocessConfig,
+    splits_dir: Path,
+    model_out_dir: Path,
+) -> dict:
+    from .train import load_tensor_split
+
+    model_out_dir.mkdir(parents=True, exist_ok=True)
+    model, _ = load_checkpoint(checkpoint_path)
+
+    opset = int(train_cfg.get_path("export.opset", 17))
+    fp32_path = model_out_dir / "icon-classifier.fp32.onnx"
+    int8_path = model_out_dir / "icon-classifier.onnx"
+    export_onnx(model, preprocess_cfg.input_size, preprocess_cfg.channels, fp32_path, opset)
+
+    # calibration from val (fall back to test_id), normalized exactly like training
+    cal_x = None
+    n_cal = int(train_cfg.get_path("export.calibration_samples", 0))
+    for split in ("val", "test_id", "train"):
+        xs, _, _, _ = load_tensor_split(splits_dir / f"{split}.npz", preprocess_cfg)
+        if len(xs):
+            cal_x = xs.numpy()[:n_cal] if n_cal else xs.numpy()
+            break
+
+    quantize(fp32_path, int8_path, str(train_cfg.get_path("export.quantize", "static")), cal_x)
+
+    # parity on Test-ID (fall back to val)
+    par_x = None
+    for split in ("test_id", "val", "train"):
+        xs, _, _, _ = load_tensor_split(splits_dir / f"{split}.npz", preprocess_cfg)
+        if len(xs):
+            par_x = xs.numpy()
+            break
+    parity = parity_check(model, int8_path, par_x if par_x is not None else np.zeros((0,)))
+
+    thr = train_cfg.get_path("export.parity", {}) or {}
+    min_agree = float(thr.get("min_top1_agreement", 0.0))
+    max_mse = float(thr.get("max_logit_mse", float("inf")))
+    ok = (np.isnan(parity["top1_agreement"]) or parity["top1_agreement"] >= min_agree) and (
+        np.isnan(parity["logit_mse"]) or parity["logit_mse"] <= max_mse
+    )
+
+    # ship the contract files alongside the model
+    shutil.copyfile(paths.LABELS_JSON, model_out_dir / "labels.json")
+    shutil.copyfile(paths.PREPROCESS_JSON, model_out_dir / "preprocess.json")
+
+    sizes = {
+        "fp32_mb": round(fp32_path.stat().st_size / 1e6, 3),
+        "int8_mb": round(int8_path.stat().st_size / 1e6, 3),
+    }
+    report = {
+        "checkpoint": str(checkpoint_path),
+        "onnx_int8": str(int8_path),
+        "opset": opset,
+        "quantize": train_cfg.get_path("export.quantize", "static"),
+        "sizes": sizes,
+        "parity": parity,
+        "parity_thresholds": {"min_top1_agreement": min_agree, "max_logit_mse": max_mse},
+        "parity_ok": bool(ok),
+    }
+    (model_out_dir / "export_report.json").write_text(json.dumps(report, indent=2))
+    print(json.dumps(report, indent=2))
+    if not ok:
+        print("[export] WARNING: parity gate FAILED — would be a release blocker on real data")
+    return report

@@ -1,0 +1,36 @@
+{
+  "$comment": "SINGLE SOURCE OF TRUTH for icon preprocessing. Plan §5.5/§5.8. This exact transform MUST be reproduced byte-for-byte by the extension's src/shared/config.ts and the OffscreenCanvas rasterization path. Changing any value here is a model-breaking change: retrain + re-export, never edit unilaterally on one side.",
+  "version": 1,
+  "input_size": 64,
+  "render": {
+    "$comment": "How the lab rasterizes SVGs. 'chromium' renders through real Chromium Canvas to match the extension's deployment renderer (the #1 train/serve-skew lever, plan §7).",
+    "backend": "chromium",
+    "fallback_backends": ["cairosvg", "svglib"],
+    "supersample": 2,
+    "$comment_supersample": "Render at input_size*supersample then box-downscale, approximating Canvas drawImage anti-aliasing. Applied identically wherever the fixed transform runs."
+  },
+  "color": {
+    "$comment": "Web icons inherit currentColor on arbitrary backgrounds. We composite RGBA over a fixed background, reduce to single-channel luminance, optionally normalize polarity to dark-glyph-on-light, then replicate to 3 channels for the ImageNet-pretrained backbone. Color is a TRAIN-TIME augmentation (augment.py); the deploy transform below is fixed and color-collapsing.",
+    "background": [255, 255, 255],
+    "luminance_weights": [0.299, 0.587, 0.114],
+    "auto_polarity": true,
+    "polarity_reference": "border",
+    "$comment_polarity": "If true, flip luminance so the image border (assumed background) is the light side. Makes the model invariant to dark-mode / inverted icons."
+  },
+  "channels": 3,
+  "channel_layout": "luminance_replicated",
+  "resize": {
+    "method": "bilinear",
+    "antialias": true,
+    "$comment": "Final resize from supersampled raster to input_size. PIL BILINEAR + reduce; the TS side must use the equivalent Canvas drawImage with imageSmoothingQuality high."
+  },
+  "normalize": {
+    "$comment": "Applied per-channel after scaling pixels to [0,1]. mean/std 0.5 maps to [-1,1]; identical 3-channel stats because all channels carry the same luminance.",
+    "mean": [0.5, 0.5, 0.5],
+    "std": [0.5, 0.5, 0.5]
+  },
+  "tensor": {
+    "layout": "NCHW",
+    "dtype": "float32"
+  }
+}

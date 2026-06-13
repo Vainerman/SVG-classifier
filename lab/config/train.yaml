@@ -1,0 +1,86 @@
+# Training / data / export / eval configuration for the icon-classifier lab.
+# Plan §5.6–5.9. Values here are tunable; preprocess.json and labels.json are NOT
+# (those are the byte-for-byte-shared contract with the extension).
+#
+# `smoke.py` overrides a few of these (epochs, pretrained, augment count) for a
+# fast end-to-end CPU run on mock data.
+
+data:
+  # Root holding the raw SVG tree: <root>/<library>/<variant-subpath...>/<name>.svg.
+  # Mock data lives in data/mock; real data fetched by scripts/fetch_icons.sh lives in data/raw.
+  raw_root: data/mock
+  # Whole libraries withheld from training -> Test-OOD (generalization to unseen styles, plan §5.6).
+  ood_libraries: [phosphor]
+  # Concepts deliberately excluded from the taxonomy -> the unknown/abstention pool (plan §5.4, §5.6).
+  # These source names are rendered and labeled `unknown` for OOD-detection eval only.
+  unknown_pool_concepts: [star, cloud, bell, lock]
+  # Split ratios for in-distribution libraries, applied per canonical concept by *source icon*
+  # (all augmentations of one source SVG stay together so nothing leaks across splits, plan §5.6).
+  split:
+    train: 0.6
+    val: 0.2
+    test_id: 0.2
+  seed: 1234
+
+render:
+  # Backend resolved against preprocess.json.render.backend; overridable here for experiments.
+  backend: null            # null -> use preprocess.json value
+  workers: 1
+
+augment:
+  # Train-only augmentation (plan §5.5). Baked: this many augmented copies per train source icon.
+  copies_per_train_icon: 6
+  # Clean (un-augmented) copies per val/test source icon.
+  copies_per_eval_icon: 1
+  foreground_colors: random   # random currentColor per sample
+  background:
+    white_prob: 0.5
+    dark_prob: 0.25
+    random_prob: 0.25
+  stroke_width_jitter: [0.75, 1.5]
+  rotate_deg: 8
+  translate_frac: 0.08
+  scale: [0.85, 1.1]
+  blur_max_sigma: 0.6
+  noise_std: 0.03
+  padding_frac: [0.04, 0.18]
+
+model:
+  backbone: mobilenetv3_small_100   # timm name; see plan §5.7 candidates
+  pretrained: true
+  drop_rate: 0.1
+
+train:
+  epochs: 30
+  batch_size: 128
+  lr: 0.001
+  weight_decay: 0.05
+  warmup_epochs: 2
+  label_smoothing: 0.1
+  class_balanced_sampling: true
+  device: auto              # auto -> cuda, else mps, else cpu
+  num_workers: 0
+  amp: false
+
+export:
+  opset: 17                 # ORT Web supports; keep conservative
+  quantize: static          # static (calibration set, preferred for CNNs) | dynamic
+  calibration_samples: 128
+  parity:
+    # PyTorch-float vs ONNX-int8 agreement on Test-ID (plan §5.8 step 3). Release blocker if breached.
+    min_top1_agreement: 0.97
+    max_logit_mse: 0.05
+    # smoke.py relaxes these — mock data + 1 epoch won't meet real thresholds.
+
+eval:
+  topk: [1, 3]
+  # Coverage targets for the risk-coverage curve / threshold pick (plan §5.9).
+  coverage_targets: [0.5, 0.7, 0.9, 0.95]
+  ece_bins: 15
+
+paths:
+  # All generated artifacts (gitignored). Relative to the lab/ root.
+  manifest: data/manifest.csv
+  splits_dir: data/splits          # baked npz per split
+  artifacts_dir: artifacts         # checkpoints, onnx, reports
+  model_out_dir: artifacts/model   # icon-classifier.onnx + labels.json + preprocess.json (-> public/models/)

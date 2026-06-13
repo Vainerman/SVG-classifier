@@ -1,0 +1,22 @@
+{
+  "$comment": "SINGLE SOURCE OF TRUTH for the index<->label map (plan §5.4). Shared verbatim by training and the extension: export copies this file next to icon-classifier.onnx (destined for public/models/labels.json). `labels[i].index` is the model's output column i. `synonyms` are alternate source-icon names that collapse to this canonical concept; taxonomy.py derives the reverse name->canonical map from them. Keep ordered by index, contiguous from 0.",
+  "version": 1,
+  "unknown": {
+    "label": "unknown",
+    "explicit_class": false,
+    "$comment": "Open decision (plan §5.11). Default: `unknown` is NOT a trained class; out-of-taxonomy icons are handled by abstaining below `default_threshold` (tuned later from the risk-coverage curve). Flip explicit_class=true to also train it as a real class — then add it to `labels` and regenerate.",
+    "default_threshold": 0.5
+  },
+  "labels": [
+    { "index": 0, "name": "home",        "display": "home",        "synonyms": ["house", "house-door", "home-2"] },
+    { "index": 1, "name": "search",      "display": "search",      "synonyms": ["magnifier", "magnifying-glass", "find", "zoom"] },
+    { "index": 2, "name": "settings",    "display": "settings",    "synonyms": ["gear", "cog", "cog-6-tooth", "gear-6", "preferences"] },
+    { "index": 3, "name": "user",        "display": "user",        "synonyms": ["person", "account", "profile", "avatar", "user-circle"] },
+    { "index": 4, "name": "heart",       "display": "heart",       "synonyms": ["favorite", "like", "heart-fill"] },
+    { "index": 5, "name": "arrow-right", "display": "arrow right", "synonyms": ["arrow-forward", "arrow-right-line", "arrow-narrow-right"] },
+    { "index": 6, "name": "close",       "display": "close",       "synonyms": ["x", "times", "cross", "dismiss", "x-mark", "xmark"] },
+    { "index": 7, "name": "menu",        "display": "menu",        "synonyms": ["hamburger", "bars", "menu-2", "list-bars"] },
+    { "index": 8, "name": "trash",       "display": "trash",       "synonyms": ["delete", "bin", "trash-can", "trash-2", "trashcan"] },
+    { "index": 9, "name": "download",    "display": "download",    "synonyms": ["arrow-download", "save-alt", "download-line"] }
+  ]
+}
