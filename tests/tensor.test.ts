@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { float32ToBase64, base64ToFloat32, checksumTensor } from '@/shared/tensor';
-import { packNCHW, type RGBAImage } from '@/content/rasterize';
+import { packNCHW, getSvgRenderSize, type RGBAImage } from '@/content/rasterize';
 import { PREPROCESS } from '@/shared/config';
 
 describe('tensor base64 round-trip (chrome.runtime is JSON-only)', () => {
@@ -45,5 +45,30 @@ describe('packNCHW', () => {
     // R channel: index 0 = px0 (black), index 1 = px1 (white)
     expect(out[0]).toBeCloseTo((0 - mean[0]) / std[0], 5);
     expect(out[1]).toBeCloseTo((1 - mean[0]) / std[0], 5);
+  });
+});
+
+describe('getSvgRenderSize — the inline-SVG raster fix', () => {
+  function svgEl(html: string): SVGElement {
+    document.body.innerHTML = html;
+    return document.body.querySelector('svg') as unknown as SVGElement;
+  }
+
+  it('derives size from viewBox when width/height are absent (the bug case)', () => {
+    expect(getSvgRenderSize(svgEl('<svg viewBox="0 0 24 24"></svg>'))).toEqual({ w: 24, h: 24 });
+  });
+
+  it('handles non-square viewBoxes', () => {
+    expect(getSvgRenderSize(svgEl('<svg viewBox="0 0 48 16"></svg>'))).toEqual({ w: 48, h: 16 });
+  });
+
+  it('prefers numeric width/height when there is no viewBox', () => {
+    expect(getSvgRenderSize(svgEl('<svg width="32" height="20"></svg>'))).toEqual({ w: 32, h: 20 });
+  });
+
+  it('falls back to a non-zero default when nothing is specified', () => {
+    const { w, h } = getSvgRenderSize(svgEl('<svg></svg>'));
+    expect(w).toBeGreaterThan(0);
+    expect(h).toBeGreaterThan(0);
   });
 });

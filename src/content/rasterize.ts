@@ -11,7 +11,7 @@
  * out as a pure function and unit-tested with a synthetic ImageData.
  */
 import { PREPROCESS } from '@/shared/config';
-import type { IconKind } from '@/content/extract';
+import { resolveUses, type IconKind } from '@/content/extract';
 import { CONFIG_VERSION } from '@/shared/config';
 import type { IconTensor } from '@/shared/messages';
 import { float32ToBase64 } from '@/shared/tensor';
@@ -54,7 +54,34 @@ function tensorFrom(arr: Float32Array): IconTensor {
   };
 }
 
-/** Resolve currentColor and intrinsic size into a standalone SVG string. */
+/** Render size to target — bigger than the canvas for crisp downscaling. */
+const RENDER_TARGET = 128;
+
+/**
+ * Intrinsic SVG size in user units. Prefer viewBox (unit-agnostic), then numeric
+ * width/height, then the rendered box, then a default. Many real icons set ONLY
+ * a viewBox — and createImageBitmap throws on an SVG with no explicit pixel size,
+ * which is exactly why inline SVGs must get width/height before rasterizing.
+ */
+export function getSvgRenderSize(svg: SVGElement): { w: number; h: number } {
+  const vb = svg.getAttribute('viewBox');
+  if (vb) {
+    const p = vb.split(/[\s,]+/).map(Number);
+    if (p.length === 4 && p[2] > 0 && p[3] > 0) return { w: p[2], h: p[3] };
+  }
+  const wAttr = parseFloat(svg.getAttribute('width') ?? '');
+  const hAttr = parseFloat(svg.getAttribute('height') ?? '');
+  if (wAttr > 0 && hAttr > 0) return { w: wAttr, h: hAttr };
+  try {
+    const r = (svg as unknown as Element).getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) return { w: r.width, h: r.height };
+  } catch {
+    /* detached / jsdom */
+  }
+  return { w: SIZE, h: SIZE };
+}
+
+/** Resolve currentColor and force explicit dimensions into a standalone SVG string. */
 function prepareSvgString(svg: SVGElement): string {
   const clone = svg.cloneNode(true) as SVGElement;
   let color: string = PREPROCESS.foregroundFallback;
@@ -64,13 +91,34 @@ function prepareSvgString(svg: SVGElement): string {
   } catch {
     /* fall back to default foreground */
   }
+  // Inline <use> sprite geometry so the standalone SVG isn't blank.
+  resolveUses(clone);
+
   // currentColor in the markup resolves against the root `color`.
   clone.setAttribute('color', color);
   clone.style.color = color;
+
+  const { w, h } = getSvgRenderSize(svg);
+  // A viewBox is required for the content to scale to the new width/height.
+  if (!clone.getAttribute('viewBox')) clone.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  const k = RENDER_TARGET / Math.max(w, h);
+  clone.setAttribute('width', String(Math.max(1, Math.round(w * k))));
+  clone.setAttribute('height', String(Math.max(1, Math.round(h * k))));
   if (!clone.getAttribute('xmlns')) {
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   }
   return new XMLSerializer().serializeToString(clone);
+}
+
+/** Fallback for environments/SVGs where createImageBitmap(blob) is unreliable. */
+function loadSvgImage(svgString: string): Promise<HTMLImageElement> {
+  const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('SVG image decode failed'));
+    img.src = url;
+  });
 }
 
 /** Draw a source onto a white SIZE×SIZE canvas, contain-padded, → ImageData. */
@@ -112,10 +160,17 @@ export async function rasterizeIcon(
     } else {
       const svg = el as unknown as SVGElement;
       const svgString = prepareSvgString(svg);
-      const blob = new Blob([svgString], { type: 'image/svg+xml' });
-      const bitmap = await createImageBitmap(blob);
-      drawContain(ctx, bitmap, bitmap.width || SIZE, bitmap.height || SIZE);
-      bitmap.close();
+      try {
+        const blob = new Blob([svgString], { type: 'image/svg+xml' });
+        const bitmap = await createImageBitmap(blob);
+        drawContain(ctx, bitmap, bitmap.width || SIZE, bitmap.height || SIZE);
+        bitmap.close();
+      } catch {
+        // Some Chrome builds reject SVG blobs in createImageBitmap; the <img>
+        // data-URL path is more forgiving.
+        const img = await loadSvgImage(svgString);
+        drawContain(ctx, img, img.naturalWidth || SIZE, img.naturalHeight || SIZE);
+      }
     }
     // getImageData throws (SecurityError) if the canvas is tainted by a
     // cross-origin <img> SVG — caught below → null → skip classification.

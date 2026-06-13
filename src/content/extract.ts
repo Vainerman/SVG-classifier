@@ -41,8 +41,10 @@ function isVolatile(name: string): boolean {
   return VOLATILE_ATTRS.has(name) || name.startsWith('data-') || name.startsWith('aria-');
 }
 
-/** Resolve <use href="#id"> against in-document <symbol>/<g>/defs, inlining geometry. */
-function resolveUses(svg: SVGElement): void {
+/** Resolve <use href="#id"> against in-document <symbol>/<g>/defs, inlining geometry.
+ *  Exported so rasterization can inline the same geometry (else a standalone
+ *  sprite SVG renders blank — its symbol lives in the page document). */
+export function resolveUses(svg: SVGElement): void {
   const doc = svg.ownerDocument;
   const uses = Array.from(svg.querySelectorAll('use'));
   for (const use of uses) {
