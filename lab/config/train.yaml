@@ -77,7 +77,13 @@ train:
 
 export:
   opset: 17                 # ORT Web supports; keep conservative
-  quantize: static          # static (calibration set, preferred for CNNs) | dynamic
+  # fp16 | static | dynamic. fp16 chosen: int8 *activation* quant is intrinsically
+  # lossy on MobileNetV3 (hardswish + squeeze-excite) — best int8 config recovered
+  # only ~0.73 top1 vs 0.904 fp32 (fails the 0.97 parity gate) without QAT. fp16 is
+  # near-lossless (~0.9995 agreement) at half the fp32 size and ORT-Web supports it.
+  # static/dynamic still wired (calibration_samples used by static) for a future
+  # QAT or quant-friendly-backbone (EfficientNet-Lite/MobileNetV2) revisit.
+  quantize: fp16
   calibration_samples: 128
   parity:
     # PyTorch-float vs ONNX-int8 agreement on Test-ID (plan §5.8 step 3). Release blocker if breached.

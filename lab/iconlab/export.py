@@ -95,6 +95,27 @@ class _ArrayCalibrationReader:
         self._i = 0
 
 
+def _to_fp16(fp32_path: Path, out_path: Path) -> Path:
+    """Cast the fp32 graph to fp16, keeping fp32 I/O.
+
+    int8 *activation* quantization is intrinsically lossy on MobileNetV3-family
+    backbones (hardswish + squeeze-excite blocks): no calibration method recovers
+    more than ~0.73 top1 vs the 0.90 fp32 model, so it can't clear the parity gate
+    without quantization-aware training. fp16 is near-lossless (~0.9995 agreement)
+    at half the fp32 size and is well-supported by onnxruntime-web's WebGPU/WASM
+    backends. `keep_io_types=True` leaves the input/output fp32 so the extension's
+    preprocess contract (float32 NCHW in, float32 logits out) is unchanged; the cast
+    happens inside the graph.
+    """
+    import onnx
+    from onnxruntime.transformers.float16 import convert_float_to_float16
+
+    model = onnx.load(str(fp32_path))
+    fp16 = convert_float_to_float16(model, keep_io_types=True)
+    onnx.save(fp16, str(out_path))
+    return out_path
+
+
 def quantize(
     fp32_path: Path,
     int8_path: Path,
@@ -103,6 +124,9 @@ def quantize(
 ) -> Path:
     from onnxruntime.quantization import QuantType, quantize_dynamic, quantize_static
     from onnxruntime.quantization import QuantFormat
+
+    if mode == "fp16":
+        return _to_fp16(fp32_path, int8_path)
 
     # shape-inference / cleanup pre-pass improves quantization robustness
     src = fp32_path
@@ -211,15 +235,16 @@ def export(
     shutil.copyfile(paths.LABELS_JSON, model_out_dir / "labels.json")
     shutil.copyfile(paths.PREPROCESS_JSON, model_out_dir / "preprocess.json")
 
+    mode = str(train_cfg.get_path("export.quantize", "static"))
     sizes = {
         "fp32_mb": round(fp32_path.stat().st_size / 1e6, 3),
-        "int8_mb": round(int8_path.stat().st_size / 1e6, 3),
+        "quantized_mb": round(int8_path.stat().st_size / 1e6, 3),
     }
     report = {
         "checkpoint": str(checkpoint_path),
-        "onnx_int8": str(int8_path),
+        "onnx_model": str(int8_path),
         "opset": opset,
-        "quantize": train_cfg.get_path("export.quantize", "static"),
+        "quantize": mode,
         "sizes": sizes,
         "parity": parity,
         "parity_thresholds": {"min_top1_agreement": min_agree, "max_logit_mse": max_mse},

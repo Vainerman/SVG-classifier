@@ -1,8 +1,8 @@
 # Training & eval pipeline
 
-The §5.5–§5.9 half of the lab: render/augment → fine-tune (`timm`) → ONNX int8
-export with a PyTorch↔ONNX parity gate → full metric suite. Runs on the real
-collected dataset; `scripts/smoke.py` exercises the whole chain on a small
+The §5.5–§5.9 half of the lab: render/augment → fine-tune (`timm`) → ONNX
+export (fp16) with a PyTorch↔ONNX parity gate → full metric suite. Runs on the
+real collected dataset; `scripts/smoke.py` exercises the whole chain on a small
 subsample. The data-collection half (`scripts/fetch_icons.sh`, `data/raw/`,
 `data/provenance.*`, `data/concepts.tsv`) is documented in `data/README.md`, and
 the canonical taxonomy is built from it by `data/relabel/` (see below).
@@ -75,13 +75,35 @@ filename-vs-index drift). To train for real:
 ```bash
 python scripts/build_dataset.py                # provenance-resolved manifest + render + bake splits
 python scripts/train.py                        # -> artifacts/checkpoint.pt
-python scripts/export.py                        # -> artifacts/model/ (int8 + parity gate)
+python scripts/export.py                        # -> artifacts/model/ (fp16 + parity gate)
 python scripts/evaluate.py                      # acc / macro-F1 / ECE / risk-coverage / OOD AUROC
 ```
 
 Pick the abstention threshold τ from the risk–coverage table in
 `artifacts/model/eval_report.json` and record it in `labels.json`
 (`unknown.default_threshold`).
+
+### Last full real-data run (MobileNetV3-Small, 30 epochs, MPS)
+
+| Split | n | Top-1 | Top-3 | macro-F1 | ECE |
+|---|---|---|---|---|---|
+| val | 2153 | 0.903 | 0.959 | 0.878 | 0.19 |
+| test_id | 2149 | 0.904 | 0.961 | 0.873 | 0.19 |
+| test_ood (phosphor, unseen library) | 3798 | 0.505 | 0.662 | 0.438 | 0.11 |
+
+Unknown-detection AUROC (max-softmax, test_id vs 526-icon unknown pool) = **0.884**.
+At the recorded **τ = 0.5**: 81% known coverage, **97.0%** accuracy on accepted
+labels, **87.3%** of out-of-taxonomy icons correctly abstained.
+
+**Quantization: fp16, not int8.** int8 *activation* quantization is intrinsically
+lossy on MobileNetV3-family backbones (hardswish + squeeze-excite). The parity gate
+caught it: across ~8 int8 configs (MinMax/Entropy/Percentile calibration, symmetric,
+reduce-range, per-channel, sensitive-node exclusion, static + dynamic) the best int8
+recovered only ~0.73 top-1 vs 0.904 fp32 — well under the 0.97 agreement gate, so it
+would never ship. fp16 is near-lossless (top-1 0.9037, **0.9995** agreement, logit
+MSE 6.5e-6) at **3.62 MB** (half the 7.19 MB fp32). True int8 here needs
+quantization-aware training or a quant-designed backbone (EfficientNet-Lite /
+MobileNetV2 — but those are larger, so their int8 would exceed fp16's size anyway).
 
 ## Manifests — two distinct files, no collision
 
@@ -124,7 +146,8 @@ iconlab/evaluate.py    top1/3, macro-F1, confusion, ECE, risk-coverage, OOD AURO
 - Final backbone + input resolution (accuracy/latency/size sweep).
 - `unknown` as an explicit trained class vs pure threshold abstention
   (`labels.json: unknown.explicit_class`).
-- Static vs dynamic int8 + calibration-set construction.
+- int8 revisit: QAT or a quant-friendly backbone if a sub-3 MB model is needed
+  (current ship is fp16 — int8 fails the parity gate on MobileNetV3, see above).
 - **Test-Wild** wiring (`data/wild/`) — the primary KPI slot.
 - **ORT *Web* load check**: `export.py` verifies the model under Python
   onnxruntime; the WebGPU/WASM load+run check can only run in JS and must be wired

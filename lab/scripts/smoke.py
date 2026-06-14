@@ -114,7 +114,7 @@ def main() -> int:
         print(f"[smoke] FAIL — missing artifacts: {missing}")
         return 1
     print(f"\n[smoke] PASS — bundle at {model_out}")
-    print(f"[smoke]   int8 size: {report['sizes']['int8_mb']} MB, parity={report['parity']}")
+    print(f"[smoke]   {report['quantize']} size: {report['sizes']['quantized_mb']} MB, parity={report['parity']}")
     return 0
 
 
