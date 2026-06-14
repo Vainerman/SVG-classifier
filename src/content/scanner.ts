@@ -6,9 +6,18 @@
  * the MutationObserver forever. We ignore attribute mutations to our OWNED_ATTRS
  * and skip any node already carrying the sentinel.
  */
-import { OWNED_ATTRS, SENTINEL_ATTR } from '@/shared/config';
+import { OWNED_ATTRS } from '@/shared/config';
+import { isHandled } from '@/content/handled';
 
 const OWNED = new Set<string>(OWNED_ATTRS);
+
+export interface ScannerOptions {
+  /** Process every candidate as soon as it's discovered, rather than waiting for
+   *  it to scroll into view. Ephemeral mode needs labels registered before the
+   *  user can Tab to an off-screen control; and since ephemeral processing makes
+   *  no DOM writes, there's no footprint cost to being eager. */
+  eager?: boolean;
+}
 
 // Candidate icons: inline/sprite <svg>, and <img> whose source looks like SVG.
 const IMG_SVG_SELECTOR =
@@ -23,7 +32,13 @@ export class Scanner {
   private observedRoots = new WeakSet<Node>();
   private queued = new WeakSet<Element>();
 
-  constructor(private readonly onCandidate: CandidateHandler) {
+  private readonly eager: boolean;
+
+  constructor(
+    private readonly onCandidate: CandidateHandler,
+    opts: ScannerOptions = {},
+  ) {
+    this.eager = opts.eager ?? false;
     this.io = new IntersectionObserver(this.onIntersect, { rootMargin: '100px' });
   }
 
@@ -63,13 +78,15 @@ export class Scanner {
 
   private consider(el: Element): void {
     if (this.queued.has(el)) return;
-    if (el.hasAttribute(SENTINEL_ATTR)) return;
+    if (isHandled(el)) return;
     // Nested <svg> inside an <svg> (e.g. <use> targets): only the outermost counts.
     if (el.tagName.toLowerCase() === 'svg' && el.parentElement?.closest('svg')) {
       return;
     }
     this.queued.add(el);
-    this.io.observe(el);
+    // Eager: emit now. Lazy (visible-first): wait until it scrolls into view.
+    if (this.eager) this.onCandidate(el);
+    else this.io.observe(el);
   }
 
   private onIntersect = (entries: IntersectionObserverEntry[]): void => {
@@ -77,7 +94,7 @@ export class Scanner {
       if (!entry.isIntersecting) continue;
       const el = entry.target;
       this.io.unobserve(el);
-      if (!el.hasAttribute(SENTINEL_ATTR)) this.onCandidate(el);
+      if (!isHandled(el)) this.onCandidate(el);
     }
   };
 
@@ -102,10 +119,7 @@ export class Scanner {
       // Ignore mutations we caused.
       if (rec.type === 'attributes') {
         if (rec.attributeName && OWNED.has(rec.attributeName)) continue;
-        if (
-          rec.target instanceof Element &&
-          rec.target.getAttribute(SENTINEL_ATTR)
-        ) {
+        if (rec.target instanceof Element && isHandled(rec.target)) {
           continue;
         }
       }

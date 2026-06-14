@@ -79,6 +79,17 @@
       <span class="nope">should NOT touch</span> ones. Then navigate with a
       screen reader and confirm the announcements.
     </p>
+    <p class="desc">
+      <strong>On-demand (ephemeral) mode — the default.</strong> Nothing is
+      written to the DOM at load. <strong>Tab</strong> through the page: the
+      focusable icon controls in <em>Section&nbsp;3</em> (icon-only button and
+      link) should announce their generated name as they receive focus
+      (e.g. "remove, button"), and the <code>aria-label</code> is removed again
+      on blur — inspect an element while focused vs. blurred to see it appear and
+      vanish. Non-focusable standalone icons (Sections&nbsp;1, 5, 6, 8) are NOT
+      labeled in this mode by design; switch to legacy "label at load" mode in
+      the options page to see those.
+    </p>
 
     <!-- Shared sprite sheet for the <use> case -->
     <svg style="display: none" aria-hidden="true">

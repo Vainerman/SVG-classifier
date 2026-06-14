@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { applyLabel, composeLabel, isHandled } from '@/content/overlay';
+import { applyLabel, composeLabel } from '@/content/overlay';
+import { isHandled } from '@/content/handled';
 import { DEFAULT_BEHAVIOR, SENTINEL_ATTR } from '@/shared/config';
 import type { ClassifyResult } from '@/shared/messages';
 
@@ -46,8 +47,8 @@ describe('composeLabel', () => {
   });
 });
 
-describe('applyLabel — aria injection', () => {
-  it('inline svg gets role=img, aria-label, <title>, and the sentinel', () => {
+describe('applyLabel — persistent-mode aria injection', () => {
+  it('inline svg gets role=img, aria-label, <title> — and NO sentinel attribute', () => {
     document.body.innerHTML = '<svg><path/></svg>';
     const svg = document.body.querySelector('svg')!;
     const wrote = applyLabel(svg, 'inline-svg', result('home'), settings);
@@ -55,7 +56,9 @@ describe('applyLabel — aria injection', () => {
     expect(svg.getAttribute('role')).toBe('img');
     expect(svg.getAttribute('aria-label')).toBe('home (auto-labeled)');
     expect(svg.querySelector('title')?.textContent).toBe('home (auto-labeled)');
-    expect(svg.getAttribute(SENTINEL_ATTR)).toBe('home');
+    // Handled-state is off-DOM now: tracked in the WeakSet, never written as an
+    // attribute (so page integrity monitors have nothing to hash).
+    expect(svg.hasAttribute(SENTINEL_ATTR)).toBe(false);
     expect(isHandled(svg)).toBe(true);
   });
 

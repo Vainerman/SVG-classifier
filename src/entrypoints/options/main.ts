@@ -17,6 +17,7 @@ function flashSaved(): void {
 
 async function init(): Promise<void> {
   const settings = await getSettings();
+  const ephemeralMode = $<HTMLInputElement>('ephemeralMode');
   const useFreeLabelHints = $<HTMLInputElement>('useFreeLabelHints');
   const attributionText = $<HTMLInputElement>('attributionText');
   const idbMaxEntries = $<HTMLInputElement>('idbMaxEntries');
@@ -24,6 +25,7 @@ async function init(): Promise<void> {
   const deferActivation = $<HTMLInputElement>('deferActivation');
   const deferDelayMs = $<HTMLInputElement>('deferDelayMs');
 
+  ephemeralMode.checked = settings.injectionMode === 'ephemeral';
   useFreeLabelHints.checked = settings.useFreeLabelHints;
   attributionText.value = settings.attributionText;
   idbMaxEntries.value = String(settings.idbMaxEntries);
@@ -31,6 +33,12 @@ async function init(): Promise<void> {
   deferActivation.checked = settings.deferActivation;
   deferDelayMs.value = String(settings.deferDelayMs);
 
+  ephemeralMode.addEventListener('change', async () => {
+    await setSettings({
+      injectionMode: ephemeralMode.checked ? 'ephemeral' : 'persistent',
+    });
+    flashSaved();
+  });
   useFreeLabelHints.addEventListener('change', async () => {
     await setSettings({ useFreeLabelHints: useFreeLabelHints.checked });
     flashSaved();

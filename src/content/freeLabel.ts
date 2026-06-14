@@ -125,13 +125,45 @@ function visibleTextExcludingIcons(el: Element): string {
   return text.trim();
 }
 
-function nearestInteractiveAncestor(el: Element): Element | null {
+export function nearestInteractiveAncestor(el: Element): Element | null {
   for (let n = el.parentElement; n; n = n.parentElement) {
     const tag = n.tagName.toLowerCase();
     if (tag === 'a' && n.hasAttribute('href')) return n;
     if (INTERACTIVE_TAGS.has(tag) && tag !== 'a') return n;
     if (INTERACTIVE_ROLES.has(attr(n, 'role'))) return n;
   }
+  return null;
+}
+
+/** Does this element already carry an accessible name a screen reader would
+ *  announce — by its own ARIA/title/alt, or by visible text (excluding the
+ *  icon)? Used at focus time to abort ephemeral injection if the page named the
+ *  control after we classified it (do-no-harm). */
+export function hasOwnAccessibleName(el: Element): boolean {
+  return Boolean(ownName(el) || visibleTextExcludingIcons(el));
+}
+
+/** Is `el` reachable by keyboard Tab focus? (Native focusable, or tabindex≥0.) */
+export function isFocusable(el: Element): boolean {
+  if (el.hasAttribute('disabled')) return false;
+  const ti = el.getAttribute('tabindex');
+  if (ti !== null) return Number.parseInt(ti, 10) >= 0;
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'a' || tag === 'area') return el.hasAttribute('href');
+  return tag === 'button' || tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'summary';
+}
+
+/**
+ * For ephemeral (on-demand) injection: the element that receives focus and onto
+ * which the icon's name should be written. Almost always the icon's nearest
+ * focusable interactive ancestor (an icon-only button/link); or the icon itself
+ * if it's directly focusable (a tabindexed <svg>). Returns null when nothing is
+ * keyboard-reachable — those icons are out of scope for focus-driven labeling.
+ */
+export function resolveFocusTarget(icon: Element): Element | null {
+  const ctrl = nearestInteractiveAncestor(icon);
+  if (ctrl && isFocusable(ctrl)) return ctrl;
+  if (isFocusable(icon)) return icon;
   return null;
 }
 

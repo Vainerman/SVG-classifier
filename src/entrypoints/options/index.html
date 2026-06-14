@@ -57,6 +57,23 @@
 
     <div class="field">
       <label
+        ><input type="checkbox" id="ephemeralMode" /> On-demand labeling
+        (recommended)</label
+      >
+      <div class="hint">
+        Writes <strong>no</strong> labels at page load. Instead, a single
+        <code>aria-label</code> is injected onto an icon button/link
+        <em>only while it has keyboard focus</em>, then removed on blur — so the
+        page DOM stays untouched during invisible bot-challenge checks
+        (Cloudflare, DataDome, Vercel BotID). Uncheck for the legacy
+        "label everything at load" mode: it also labels non-focusable icons, but
+        its DOM writes are visible to site integrity monitors and can trip
+        checkpoints.
+      </div>
+    </div>
+
+    <div class="field">
+      <label
         ><input type="checkbox" id="useFreeLabelHints" /> Trust class / filename
         hints</label
       >

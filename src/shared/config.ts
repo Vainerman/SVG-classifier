@@ -59,6 +59,19 @@ export const MOCK_MODE = false;
 
 export type AttributionMode = 'suffix' | 'roledescription' | 'none';
 
+/**
+ * How the label reaches the screen reader:
+ *  - 'ephemeral' (default): write a single aria-label onto a control ONLY while
+ *    it holds keyboard focus, then strip it on blur. The page DOM stays pristine
+ *    during the bot-challenge window; the one transient mutation is correlated
+ *    with genuine user focus. Covers keyboard-reachable icons (icon buttons/
+ *    links). See content/ephemeral.ts.
+ *  - 'persistent': legacy — write aria/role/title/alt into the DOM at load and
+ *    leave it. Labels every icon (incl. non-focusable) but is visible to page
+ *    integrity monitors. Kept for comparison/testing.
+ */
+export type InjectionMode = 'ephemeral' | 'persistent';
+
 export interface BehaviorSettings {
   enabled: boolean;
   /** Below this, the icon is treated as `unknown` and NO aria is written. */
@@ -86,6 +99,9 @@ export interface BehaviorSettings {
   deferActivation: boolean;
   /** When deferActivation is on: ms to wait (or until first interaction) before scanning. */
   deferDelayMs: number;
+  /** How labels reach the screen reader. Default 'ephemeral' (focus-driven, leaves
+   *  the load-time DOM untouched so bot-challenge integrity checks don't trip). */
+  injectionMode: InjectionMode;
 }
 
 export const DEFAULT_BEHAVIOR: BehaviorSettings = {
@@ -103,6 +119,7 @@ export const DEFAULT_BEHAVIOR: BehaviorSettings = {
   siteDenylist: [],
   deferActivation: false,
   deferDelayMs: 3000,
+  injectionMode: 'ephemeral',
 };
 
 /** Dedup/batch window: accumulate unique icons, then one batched classify call. */
@@ -111,10 +128,11 @@ export const BATCH = {
   maxBatch: 32,
 };
 
-/** Marks nodes we've already processed; doubles as the MutationObserver self-loop guard. */
+/** Historical name of our DOM sentinel. NO LONGER WRITTEN to the page — the
+ *  "have we processed this node" state now lives off-DOM in content/handled.ts
+ *  (a WeakSet) so we leave no foreign attribute for integrity monitors to hash.
+ *  Kept only as a defensive entry in extract.ts's volatile-attribute stripper. */
 export const SENTINEL_ATTR = 'data-icon-labeler';
-/** Stored value when we deliberately SKIP a node (already accessible / decorative). */
-export const SENTINEL_SKIP = 'skip';
 
 /** chrome.storage.local key for BehaviorSettings. */
 export const STORAGE_KEY = 'iconLabeler.settings';

@@ -23,10 +23,12 @@ import type {
 } from '@/shared/messages';
 import { Scanner } from '@/content/scanner';
 import { isDenylisted } from '@/shared/denylist';
-import { computeAccNameState } from '@/content/freeLabel';
+import { computeAccNameState, resolveFocusTarget } from '@/content/freeLabel';
 import { extractIcon, type IconKind } from '@/content/extract';
 import { rasterizeIcon } from '@/content/rasterize';
-import { applyLabel, markSkipped, isHandled, badgeLayer } from '@/content/overlay';
+import { applyLabel, composeLabel, badgeLayer } from '@/content/overlay';
+import { isHandled, markHandled, resetHandled } from '@/content/handled';
+import { EphemeralInjector } from '@/content/ephemeral';
 import { getCached, setCached } from '@/content/cache';
 
 interface PendingEntry {
@@ -54,6 +56,9 @@ const DEFER_LISTENER_OPTS: AddEventListenerOptions = {
 export class Controller {
   private settings!: BehaviorSettings;
   private scanner: Scanner | null = null;
+  /** Focus-driven on-demand injector (ephemeral mode). Lives for the page; armed
+   *  while the controller is active, disarmed (no writes) otherwise. */
+  private ephemeral = new EphemeralInjector();
   /** Cancels a pending deferred start (timer + interaction listeners); null when idle. */
   private deferCleanup: (() => void) | null = null;
   private pending = new Map<string, PendingEntry>();
@@ -78,12 +83,20 @@ export class Controller {
   }
 
   private onSettings(next: BehaviorSettings): void {
+    const modeChanged = this.settings?.injectionMode !== next.injectionMode;
     this.settings = next;
     // Re-evaluate against the new enabled flag AND a possibly-edited denylist.
     const running = this.scanner !== null || this.deferCleanup !== null;
     const shouldRun = next.enabled && this.shouldRunHere();
     if (shouldRun && !running) this.enable();
     else if (!shouldRun && running) this.disable();
+    else if (shouldRun && running && modeChanged) {
+      // Switching ephemeral⇄persistent: tear down, forget handled-state so every
+      // candidate is reconsidered under the new strategy, then rebuild.
+      this.disable();
+      resetHandled();
+      this.enable();
+    }
     // Tear down badges only when BOTH debug visualizations are off.
     if (!next.debugBadge && !next.debugLabelAll) badgeLayer.clear();
   }
@@ -103,7 +116,12 @@ export class Controller {
   private startScanner(): void {
     this.clearDefer();
     if (this.scanner) return;
-    this.scanner = new Scanner((el) => this.onCandidate(el));
+    // Ephemeral mode processes eagerly (labels must be ready before the user can
+    // Tab to an off-screen control) and arms the focus-driven injector. Eager
+    // processing makes NO DOM writes, so it costs no footprint.
+    const eager = this.settings.injectionMode === 'ephemeral';
+    if (eager) this.ephemeral.arm();
+    this.scanner = new Scanner((el) => this.onCandidate(el), { eager });
     this.scanner.start();
   }
 
@@ -132,6 +150,7 @@ export class Controller {
     this.clearDefer();
     this.scanner?.stop();
     this.scanner = null;
+    this.ephemeral.disarm();
     badgeLayer.clear();
   }
 
@@ -151,14 +170,14 @@ export class Controller {
       if (labelAll) {
         this.observe(el, acc.existingName ?? '');
       } else {
-        markSkipped(el);
+        markHandled(el);
       }
       return;
     }
 
     const extracted = extractIcon(el);
     if (!extracted) {
-      markSkipped(el);
+      markHandled(el);
       return;
     }
 
@@ -170,7 +189,8 @@ export class Controller {
         source: 'cache',
       };
       setCached(result);
-      if (applyLabel(el, extracted.kind, result, this.settings)) this.stats.labeled++;
+      markHandled(el);
+      if (this.deliver(el, extracted.kind, result)) this.stats.labeled++;
       // In debug "label all", ALSO classify it badge-only so the adopted hint can
       // be compared against the model — without touching the aria we just wrote.
       if (labelAll) this.observe(el, acc.freeLabel);
@@ -185,6 +205,15 @@ export class Controller {
       return;
     }
 
+    // Ephemeral mode: don't even classify icons nobody can focus — focus-driven
+    // labeling can't reach them (they're Architecture B's job). Saves model work
+    // and keeps the DOM untouched. Debug "label all" still classifies everything.
+    if (this.settings.injectionMode === 'ephemeral' && !labelAll && !resolveFocusTarget(el)) {
+      markHandled(el);
+      this.stats.skipped++;
+      return;
+    }
+
     this.enqueue(el, extracted, { existing: '', writeAria: true });
     this.scheduleFlush();
   }
@@ -193,9 +222,8 @@ export class Controller {
    *  generated. Marks it handled so the scanner won't re-enqueue it. */
   private observe(el: Element, existing: string): void {
     const extracted = extractIcon(el);
-    // Mark handled so the scanner won't re-enqueue — but never clobber a sentinel
-    // a prior write already set (the free-label case keeps its real label value).
-    if (!isHandled(el)) markSkipped(el);
+    // Mark handled so the scanner won't re-enqueue it.
+    if (!isHandled(el)) markHandled(el);
     if (!extracted) return;
     const cached = getCached(extracted.hash);
     if (cached) {
@@ -267,7 +295,7 @@ export class Controller {
         if (!entry) continue;
         const tensor = await rasterizeIcon(entry.sample, entry.kind);
         if (!tensor) {
-          markSkipped(entry.sample); // un-rasterizable (e.g. tainted) → leave alone
+          markHandled(entry.sample); // un-rasterizable (e.g. tainted) → leave alone
           continue;
         }
         items.push({ hash, tensor });
@@ -307,7 +335,7 @@ export class Controller {
 
     // Abstain below threshold → no aria written (do-no-harm).
     if (result.label === 'unknown' || result.confidence < this.settings.confidenceThreshold) {
-      markSkipped(el);
+      markHandled(el);
       this.stats.unknown++;
       // Still surface the model's (below-threshold) guess when labeling all.
       if (this.settings.debugLabelAll) {
@@ -315,7 +343,31 @@ export class Controller {
       }
       return;
     }
-    if (applyLabel(el, kind, result, this.settings)) this.stats.labeled++;
+    markHandled(el);
+    if (this.deliver(el, kind, result)) this.stats.labeled++;
+  }
+
+  /** Apply a label via the configured strategy. Persistent → write into the DOM
+   *  now; ephemeral → register for focus-driven injection. True if delivered. */
+  private deliver(el: Element, kind: IconKind, result: ClassifyResult): boolean {
+    if (this.settings.injectionMode === 'ephemeral') {
+      return this.deliverEphemeral(el, result);
+    }
+    return applyLabel(el, kind, result, this.settings);
+  }
+
+  private deliverEphemeral(el: Element, result: ClassifyResult): boolean {
+    const target = resolveFocusTarget(el);
+    if (!target) return false; // not keyboard-focusable → unreachable (Architecture B)
+    const { accessibleName, badgeText } = composeLabel(result.label, this.settings);
+    // role="img" only when the icon itself is the focus target; never on a real
+    // control (a <button>/<a> already carries the correct role).
+    const needsRoleImg = target === el && el.tagName.toLowerCase() === 'svg';
+    this.ephemeral.register(target, accessibleName, needsRoleImg);
+    if (this.settings.debugBadge || this.settings.debugLabelAll) {
+      badgeLayer.show(el, badgeText, result);
+    }
+    return true;
   }
 
   private listenForStatsRequests(): void {

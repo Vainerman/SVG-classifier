@@ -9,12 +9,11 @@
  *  - the debug badge is aria-hidden and never affects layout or the a11y tree.
  */
 import {
-  SENTINEL_ATTR,
-  SENTINEL_SKIP,
   MOCK_MODE,
   type AttributionMode,
   type BehaviorSettings,
 } from '@/shared/config';
+import { markHandled } from '@/content/handled';
 import type { IconKind } from '@/content/extract';
 import type { ClassifyResult } from '@/shared/messages';
 
@@ -51,19 +50,16 @@ export function composeLabel(
   return { accessibleName: `${label} ${suffix}`.trim(), badgeText: label };
 }
 
-/** Has this node already been handled by us? */
-export function isHandled(el: Element): boolean {
-  return el.hasAttribute(SENTINEL_ATTR);
-}
-
-/** Mark a node as deliberately skipped (already accessible / decorative). */
-export function markSkipped(el: Element): void {
-  el.setAttribute(SENTINEL_ATTR, SENTINEL_SKIP);
-}
+/** Last persistent label we wrote to a node (idempotency guard; off-DOM so we
+ *  leave no sentinel attribute on the page). */
+const appliedLabel = new WeakMap<Element, string>();
 
 /**
- * Apply a label to the icon node. Returns true if aria was written.
- * `kind` selects the injection strategy. Idempotent.
+ * PERSISTENT-mode aria injection (the legacy "write at load" path, kept behind
+ * the injectionMode setting for comparison). Writes the label into the page DOM
+ * and leaves it there. Returns true if aria was written. Idempotent.
+ *
+ * The default mode is ephemeral (see ephemeral.ts), which never calls this.
  */
 export function applyLabel(
   el: Element,
@@ -73,7 +69,7 @@ export function applyLabel(
 ): boolean {
   // Already labeled with this exact value → no-op (avoids attribute churn that
   // could re-trigger observers or confuse screen-reader caches).
-  if (el.getAttribute(SENTINEL_ATTR) === result.label) return false;
+  if (appliedLabel.get(el) === result.label) return false;
 
   const display = composeLabel(result.label, settings);
 
@@ -91,7 +87,8 @@ export function applyLabel(
     injectTitle(el, display.accessibleName);
   }
 
-  el.setAttribute(SENTINEL_ATTR, result.label);
+  appliedLabel.set(el, result.label);
+  markHandled(el);
 
   if (settings.debugBadge || settings.debugLabelAll) {
     badgeLayer.show(el, display.badgeText, result);
