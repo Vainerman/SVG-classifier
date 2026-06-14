@@ -16,14 +16,13 @@ beforeEach(() => {
 });
 
 describe('composeLabel', () => {
-  it('suffix mode appends the mock suffix during the mock phase', () => {
+  it('suffix mode appends the real attribution (MOCK_MODE is off)', () => {
     const d = composeLabel('home', {
       attribution: 'suffix',
       attributionText: '(auto-labeled)',
       mockAttributionText: '(mock label)',
     });
-    // MOCK_MODE is true in this build.
-    expect(d.accessibleName).toBe('home (mock label)');
+    expect(d.accessibleName).toBe('home (auto-labeled)');
     expect(d.badgeText).toBe('home');
   });
 
@@ -54,8 +53,8 @@ describe('applyLabel — aria injection', () => {
     const wrote = applyLabel(svg, 'inline-svg', result('home'), settings);
     expect(wrote).toBe(true);
     expect(svg.getAttribute('role')).toBe('img');
-    expect(svg.getAttribute('aria-label')).toBe('home (mock label)');
-    expect(svg.querySelector('title')?.textContent).toBe('home (mock label)');
+    expect(svg.getAttribute('aria-label')).toBe('home (auto-labeled)');
+    expect(svg.querySelector('title')?.textContent).toBe('home (auto-labeled)');
     expect(svg.getAttribute(SENTINEL_ATTR)).toBe('home');
     expect(isHandled(svg)).toBe(true);
   });
@@ -73,7 +72,7 @@ describe('applyLabel — aria injection', () => {
     document.body.innerHTML = '<img src="x.svg">';
     const img = document.body.querySelector('img')!;
     applyLabel(img, 'img-svg', result('trash'), settings);
-    expect(img.getAttribute('alt')).toBe('trash (mock label)');
+    expect(img.getAttribute('alt')).toBe('trash (auto-labeled)');
   });
 
   it('does not overwrite a pre-existing role on an svg', () => {

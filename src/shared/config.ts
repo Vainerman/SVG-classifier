@@ -8,28 +8,46 @@
  * a contract, not a tweakable. A snapshot test pins it so a careless edit fails
  * CI loudly. Bumping CONFIG_VERSION invalidates the IndexedDB result cache.
  */
-export const CONFIG_VERSION = 1;
+// Bumped from 1 → 2 when the real model landed: preprocessing changed from
+// RGB+ImageNet to luminance+polarity+[-1,1]. The bump invalidates stale IDB cache.
+export const CONFIG_VERSION = 2;
 
+/**
+ * Mirrors the lab's `lab/artifacts/model/preprocess.json` byte-for-byte. The
+ * model was TRAINED on exactly this transform; any divergence collapses
+ * accuracy. (See lab/iconlab/preprocess.py + render.py.)
+ */
 export const PREPROCESS = {
-  /** Square input edge. 48 is too lossy for thin 1px strokes; 96 is 2.25x the
-   *  pixels for marginal gain. */
+  /** Square input edge the model expects. */
   inputSize: 64,
-  /** RGB. The backbone is ImageNet-pretrained (3-channel); resolving
-   *  currentColor onto white preserves real foreground/background contrast. */
+  /** 3 channels, but all carry the SAME luminance (replicated) — see channelLayout. */
   channels: 3,
-  /** PyTorch/ORT default; matches a timm ONNX export. */
+  /** PyTorch/ORT default; matches the timm ONNX export ([N,3,64,64]). */
   layout: 'NCHW',
-  /** Opaque background the icon is composited onto before tensorizing. */
+  /** currentColor is forced to black to match the lab's img-loaded Chromium
+   *  render (currentColor defaults to black there). We do NOT use the page's
+   *  color — the model never saw it. */
+  renderColor: '#000000',
+  /** Opaque background the icon is composited onto. */
   background: '#FFFFFF',
-  /** Used when currentColor cannot be resolved from computed style. */
-  foregroundFallback: '#000000',
-  /** Aspect-preserving: pad to square, then resize (don't distort wide glyphs). */
-  resize: 'contain-pad',
+  /** Render at inputSize*supersample, then downscale — approximates the lab's
+   *  Canvas anti-aliasing (preprocess.json render.supersample). */
+  supersample: 2,
+  /** Collapse color → one luminance channel, then replicate to `channels`. */
+  channelLayout: 'luminance_replicated',
+  /** ITU-R BT.601 luminance weights (preprocess.json color.luminance_weights). */
+  luminanceWeights: [0.299, 0.587, 0.114] as const,
+  /** If the border ring is the dark side, invert so the background is light —
+   *  makes the model invariant to dark-mode / inverted icons. */
+  autoPolarity: true,
+  polarityReference: 'border',
+  /** Border-mean luminance below this (0..255) → flip polarity. */
+  polarityThreshold: 127.5,
+  resize: 'bilinear',
   dtype: 'float32',
-  /** ImageNet normalization — the lab fine-tunes from ImageNet weights, so these
-   *  are the train/serve match. THESE NUMBERS ARE THE SKEW TRIPWIRE. */
-  mean: [0.485, 0.456, 0.406] as const,
-  std: [0.229, 0.224, 0.225] as const,
+  /** (x-0.5)/0.5 → [-1,1]; identical per channel. THE SKEW TRIPWIRE. */
+  mean: [0.5, 0.5, 0.5] as const,
+  std: [0.5, 0.5, 0.5] as const,
 } as const;
 
 /**
@@ -37,7 +55,7 @@ export const PREPROCESS = {
  * attribution suffix, the "MOCK MODEL" popup banner, the debug-badge default,
  * and the classifier factory (offscreen/inference.ts).
  */
-export const MOCK_MODE = true;
+export const MOCK_MODE = false;
 
 export type AttributionMode = 'suffix' | 'roledescription' | 'none';
 
@@ -60,7 +78,9 @@ export interface BehaviorSettings {
 
 export const DEFAULT_BEHAVIOR: BehaviorSettings = {
   enabled: true,
-  confidenceThreshold: 0.55,
+  // Model's recommended default (labels.json unknown.default_threshold). The
+  // model is mildly over-confident (ECE ~0.19), so this is a floor, not a calibration.
+  confidenceThreshold: 0.5,
   attribution: 'suffix',
   attributionText: '(auto-labeled)',
   mockAttributionText: '(mock label)',
@@ -85,6 +105,9 @@ export const STORAGE_KEY = 'iconLabeler.settings';
 
 /** Bundled label map (single source of truth), resolved via chrome.runtime.getURL. */
 export const LABELS_URL_PATH = 'models/labels.json';
+
+/** Bundled ONNX model (fp32, WASM-safe), resolved via chrome.runtime.getURL. */
+export const MODEL_URL_PATH = 'models/icon-classifier.onnx';
 
 /** Attributes we write — the MutationObserver ignores mutations to these to
  *  avoid an infinite self-trigger loop. */

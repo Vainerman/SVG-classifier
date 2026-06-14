@@ -6,16 +6,16 @@
  * recreates it on demand, so this script just (re)initializes on load.
  */
 import { LABELS_URL_PATH } from '@/shared/config';
-import { createClassifier, type Classifier } from '@/offscreen/inference';
+import {
+  createClassifier,
+  parseLabels,
+  type Classifier,
+  type LabelsFile,
+} from '@/offscreen/inference';
 import type {
   OffscreenClassifyResponse,
   OffscreenRequest,
 } from '@/shared/messages';
-
-interface LabelsFile {
-  version: number;
-  labels: string[];
-}
 
 let classifierPromise: Promise<Classifier> | null = null;
 
@@ -28,7 +28,7 @@ async function init(): Promise<Classifier> {
   const url = chrome.runtime.getURL(LABELS_URL_PATH);
   const res = await fetch(url);
   const labelsFile = (await res.json()) as LabelsFile;
-  const classifier = createClassifier(labelsFile.labels);
+  const classifier = await createClassifier(parseLabels(labelsFile));
   await classifier.ready();
   return classifier;
 }

@@ -11,7 +11,7 @@
     "compile": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare && node scripts/copy-ort.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",
@@ -19,5 +19,8 @@
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",
     "wxt": "^0.20.0"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.26.0"
   }
 }

@@ -8,18 +8,24 @@ import { describe, it, expect } from 'vitest';
 import { PREPROCESS, CONFIG_VERSION } from '@/shared/config';
 
 describe('frozen preprocessing contract', () => {
-  it('matches the pinned snapshot (bump CONFIG_VERSION + update the lab if this changes)', () => {
+  it('matches the lab preprocess.json (bump CONFIG_VERSION + retrain if this changes)', () => {
     expect({ CONFIG_VERSION, ...PREPROCESS }).toEqual({
-      CONFIG_VERSION: 1,
+      CONFIG_VERSION: 2,
       inputSize: 64,
       channels: 3,
       layout: 'NCHW',
+      renderColor: '#000000',
       background: '#FFFFFF',
-      foregroundFallback: '#000000',
-      resize: 'contain-pad',
+      supersample: 2,
+      channelLayout: 'luminance_replicated',
+      luminanceWeights: [0.299, 0.587, 0.114],
+      autoPolarity: true,
+      polarityReference: 'border',
+      polarityThreshold: 127.5,
+      resize: 'bilinear',
       dtype: 'float32',
-      mean: [0.485, 0.456, 0.406],
-      std: [0.229, 0.224, 0.225],
+      mean: [0.5, 0.5, 0.5],
+      std: [0.5, 0.5, 0.5],
     });
   });
 });

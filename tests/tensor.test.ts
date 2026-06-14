@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { float32ToBase64, base64ToFloat32, checksumTensor } from '@/shared/tensor';
-import { packNCHW, getSvgRenderSize, type RGBAImage } from '@/content/rasterize';
-import { PREPROCESS } from '@/shared/config';
+import { imageToTensor, getSvgRenderSize, type RGBAImage } from '@/content/rasterize';
 
 describe('tensor base64 round-trip (chrome.runtime is JSON-only)', () => {
   it('survives encode → decode', () => {
@@ -17,34 +16,56 @@ describe('tensor base64 round-trip (chrome.runtime is JSON-only)', () => {
   });
 });
 
-describe('packNCHW', () => {
-  it('produces [3*H*W] in NCHW with ImageNet normalization', () => {
-    // 2x1 white image (RGBA).
-    const img: RGBAImage = {
-      width: 2,
-      height: 1,
-      data: [255, 255, 255, 255, 255, 255, 255, 255],
-    };
-    const out = packNCHW(img);
-    expect(out.length).toBe(3 * 1 * 2);
-    // white pixel: (1 - mean)/std per channel.
-    const { mean, std } = PREPROCESS;
-    expect(out[0]).toBeCloseTo((1 - mean[0]) / std[0], 5); // R, x=0
-    expect(out[2]).toBeCloseTo((1 - mean[1]) / std[1], 5); // G channel offset
-    expect(out[4]).toBeCloseTo((1 - mean[2]) / std[2], 5); // B channel offset
+describe('imageToTensor — luminance + polarity + normalize (lab parity)', () => {
+  // Build a w×h RGBA buffer from a per-pixel [r,g,b] generator.
+  function rgba(w: number, h: number, px: (x: number, y: number) => [number, number, number]): RGBAImage {
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const [r, g, b] = px(x, y);
+        data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
+      }
+    return { width: w, height: h, data };
+  }
+
+  it('outputs [3*H*W] with the luminance replicated across channels', () => {
+    const img = rgba(4, 4, () => [255, 255, 255]); // all white
+    const out = imageToTensor(img);
+    const n = 16;
+    expect(out.length).toBe(3 * n);
+    // white → lum 255 → (1-0.5)/0.5 = 1; all three channels identical.
+    expect(out[0]).toBeCloseTo(1, 5);
+    expect(out[n]).toBeCloseTo(1, 5);
+    expect(out[2 * n]).toBeCloseTo(1, 5);
   });
 
-  it('lays out channels then rows (NCHW)', () => {
-    const img: RGBAImage = {
-      width: 2,
-      height: 1,
-      data: [0, 0, 0, 255, 255, 255, 255, 255], // px0 black, px1 white
-    };
-    const out = packNCHW(img);
-    const { mean, std } = PREPROCESS;
-    // R channel: index 0 = px0 (black), index 1 = px1 (white)
-    expect(out[0]).toBeCloseTo((0 - mean[0]) / std[0], 5);
-    expect(out[1]).toBeCloseTo((1 - mean[0]) / std[0], 5);
+  it('uses BT.601 luminance weights', () => {
+    const img = rgba(2, 2, () => [255, 0, 0]); // pure red → lum 0.299*255
+    const out = imageToTensor(img);
+    // border is all-red (lum ~76 < 127.5) → polarity flips → lum 255-76=179.
+    const lum = 255 - 0.299 * 255;
+    expect(out[0]).toBeCloseTo((lum / 255 - 0.5) / 0.5, 4);
+  });
+
+  it('does NOT flip when the border is light (dark glyph on white)', () => {
+    // White border, one dark center pixel — border mean ~ white → no flip.
+    const img = rgba(3, 3, (x, y) => (x === 1 && y === 1 ? [0, 0, 0] : [255, 255, 255]));
+    const out = imageToTensor(img);
+    const center = 1 * 3 + 1; // index 4
+    expect(out[center]).toBeCloseTo(-1, 5); // black stays black → (0-0.5)/0.5 = -1
+    expect(out[0]).toBeCloseTo(1, 5); // corner white → +1
+  });
+
+  it('FLIPS when the border is dark (light glyph on dark = dark-mode icon)', () => {
+    // Black border, one white center — border dark → invert so border→light.
+    const img = rgba(3, 3, (x, y) => (x === 1 && y === 1 ? [255, 255, 255] : [0, 0, 0]));
+    const out = imageToTensor(img);
+    const center = 4;
+    // center was white(255) → flipped to 0 → (0-0.5)/0.5 = -1 (now the dark glyph)
+    expect(out[center]).toBeCloseTo(-1, 5);
+    // border was black(0) → flipped to 255 → +1 (now light background)
+    expect(out[0]).toBeCloseTo(1, 5);
   });
 });
 

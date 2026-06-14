@@ -2,19 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Current state: extension built, mock model (pre-real-model)
+## Current state: extension built, REAL model wired (271-class ONNX)
 
-The full **extension side** is implemented and runs end-to-end against a **mock classifier** (deterministic label-from-hash); the real fine-tuned ONNX model does not exist yet. The `icon-labeler-extension-plan.md` remains the source of truth for the overall design; this codebase is an **accessibility-first** realization of it (the primary deliverable is screen-reader ARIA injection, not visual overlays — see below). The model fine-tuning lab (plan §5) is still un-scaffolded.
+The full **extension side** is implemented and runs end-to-end against the **real fine-tuned model** (`MOCK_MODE = false`): a 271-class fp32 ONNX classifier (~7 MB, opset 17) trained in `lab/` and copied to `src/public/models/`, served via **onnxruntime-web** (WASM CPU EP, `numThreads=1`) in the offscreen document. A `MockClassifier` remains behind the same `Classifier` interface for pipeline tests. The `icon-labeler-extension-plan.md` is the design source of truth; the `lab/` dir is the (separately-built) training lab. This codebase is **accessibility-first** (the product is screen-reader ARIA injection, not visual overlays).
 
-**Toolchain (installed):** TypeScript + **WXT** (Vite/Rollup under the hood; chosen over CRXJS for first-class offscreen-document entrypoints + manifest generation) + Vitest/jsdom. `onnxruntime-web` is NOT yet a dependency — it drops in later behind the `Classifier` seam. The model lab will be PyTorch + `timm`, separate from the bundle.
+**Toolchain:** TypeScript + **WXT** (Vite/Rollup; chosen over CRXJS for first-class offscreen entrypoints) + Vitest/jsdom + **onnxruntime-web**. The model lab is PyTorch + `timm` under `lab/`.
 
-**Commands:** `npm run dev` (WXT dev server → load unpacked from `.output/chrome-mv3`), `npm run build`, `npm run compile` (tsc typecheck), `npm test` (Vitest). After `npm install`, `postinstall` runs `wxt prepare` to generate `.wxt/` types.
+**Commands:** `npm run dev` (load unpacked from `.output/chrome-mv3`), `npm run build`, `npm run compile` (tsc), `npm test` (Vitest). `postinstall` runs `wxt prepare` **and `scripts/copy-ort.mjs`** (copies the ORT `.wasm`+`.mjs` runtime into `src/public/ort/`, gitignored, ~13 MB, reproducible from npm). The trained model IS committed (not reproducible without the lab).
 
-**Mock → real model swap:** flip `MOCK_MODE` in `src/shared/config.ts` and replace the `createClassifier()` factory body in `src/offscreen/inference.ts` with `new OnnxClassifier(...)`. The message contracts, pipeline, rasterization, and caching do NOT change — only the classifier and `public/models/labels.json` + the `.onnx` file.
+**Train/serve parity is the #1 risk and is LOAD-BEARING.** `src/shared/config.ts` `PREPROCESS` mirrors `lab/artifacts/model/preprocess.json` byte-for-byte and `src/content/rasterize.ts` reproduces `lab/iconlab/preprocess.py`: render the SVG to a square (currentColor→**black**, supersample 2×), composite over white, **weighted luminance** (0.299/0.587/0.114), **border-ring polarity flip** (dark-mode invariance), resize to 64, replicate to 3 channels, normalize `(x-0.5)/0.5`. NOT RGB/ImageNet. Changing any value = retrain + re-export + bump `CONFIG_VERSION` (invalidates IDB cache). `config.test.ts` + `tensor.test.ts` pin this.
 
-**Accessibility model (the product):** every *genuinely unlabeled* icon gets `role="img"` + `aria-label` + an injected `<title>` (or `alt` for `<img>`), suffixed to attribute us as the source (`"home (mock label)"` now, `"home (auto-labeled)"` in the real build). The do-no-harm gate in `src/content/freeLabel.ts` leaves already-accessible icons untouched — including the ancestor-context check that prevents screen-reader "double-speak" for icons inside already-named buttons/links. Below the confidence threshold → no ARIA written.
+**ORT wasm bundling:** `wxt.config.ts` sets the Vite resolve condition `onnxruntime-web-use-extern-wasm` so Vite does NOT bundle its own copy of the wasm; we ship + load it from `ort/` via `ort.env.wasm.wasmPaths`. The extern build needs BOTH `ort-wasm-simd-threaded.{mjs,wasm}` at that path (the `.mjs` Emscripten glue is required — shipping only `.wasm` fails at session create).
 
-**Actual layout (WXT):** entrypoints in `src/entrypoints/{background.ts, content/index.ts, offscreen/, popup/, options/}`; logic modules in `src/{shared,content,offscreen}/`; bundled assets in `src/public/models/`; tests + `tests/fixtures/demo.html` (manual browser/screen-reader test page).
+**Model → labels:** `lab/artifacts/model/labels.json` (rich schema: `{index,name,display,synonyms}` + `unknown` threshold) is copied verbatim; `parseLabels()` in `inference.ts` flattens it to an index-ordered, screen-reader-humanized `string[]` (`arrow_right` → "arrow right"). `OnnxClassifier` (`src/offscreen/onnx.ts`, dynamically imported so ORT stays out of the test graph) softmaxes the `logits` output, argmaxes, and abstains below `confidenceThreshold` (default 0.5).
+
+**Accessibility model (the product):** every *genuinely unlabeled* icon gets `role="img"` + `aria-label` + an injected `<title>` (or `alt` for `<img>`), suffixed to attribute the source (`"home (auto-labeled)"`). The do-no-harm gate in `src/content/freeLabel.ts` leaves already-accessible icons untouched — incl. the ancestor-context check preventing screen-reader "double-speak" for icons inside already-named buttons/links. Below threshold → no ARIA written.
+
+**Layout (WXT):** entrypoints in `src/entrypoints/{background.ts, content/index.ts, offscreen/, popup/, options/}`; logic in `src/{shared,content,offscreen}/`; bundled assets in `src/public/{models,ort}/`; tests + `tests/fixtures/demo.html` (manual browser/screen-reader page).
 
 ## What this is
 

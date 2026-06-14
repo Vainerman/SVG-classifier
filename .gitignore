@@ -5,6 +5,9 @@ node_modules/
 .output/
 .wxt/
 
+# ORT WASM binary — ~13 MB, reproducible from npm, copied by scripts/copy-ort.mjs
+src/public/ort/
+
 # Misc
 *.log
 .DS_Store

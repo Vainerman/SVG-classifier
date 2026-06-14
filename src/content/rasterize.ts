@@ -1,24 +1,31 @@
 /**
- * Rasterize an on-page icon to the model's input tensor, per the FROZEN
- * shared/config.ts preprocessing. Runs in the content script, which has
- * OffscreenCanvas + createImageBitmap + getComputedStyle (to resolve
- * currentColor exactly as the user sees it).
+ * Rasterize an on-page icon to the model's input tensor, mirroring the lab's
+ * FIXED transform byte-for-byte (lab/iconlab/preprocess.py + render.py;
+ * lab/artifacts/model/preprocess.json). Train/serve rendering skew is the #1
+ * project risk — this file is the deploy-side half of that contract.
  *
- * (Note: the content-script `OffscreenCanvas` here is NOT the MV3 *offscreen
- * document* — that hosts inference. Two different "offscreen" things.)
+ * Pipeline (matches the lab):
+ *   1. Force the SVG to a square (supersample×inputSize), currentColor → black,
+ *      draw it over white. The SVG's own preserveAspectRatio letterboxes the art.
+ *   2. Downscale to inputSize (Canvas high-quality ≈ the lab's PIL bilinear).
+ *   3. Weighted luminance (0.299/0.587/0.114).
+ *   4. Border-ring polarity: if the border is the dark side, invert.
+ *   5. Replicate luminance to 3 channels, normalize (x-0.5)/0.5, NCHW.
  *
- * The pixel path needs a real browser; `packNCHW` (the tensor math) is factored
- * out as a pure function and unit-tested with a synthetic ImageData.
+ * Runs in the content script (has OffscreenCanvas + createImageBitmap). The
+ * pixel path needs a real browser; `imageToTensor` (steps 3-5) is a pure
+ * function, unit-tested against the Python reference.
  */
-import { PREPROCESS } from '@/shared/config';
+import { CONFIG_VERSION, PREPROCESS } from '@/shared/config';
 import { resolveUses, type IconKind } from '@/content/extract';
-import { CONFIG_VERSION } from '@/shared/config';
 import type { IconTensor } from '@/shared/messages';
 import { float32ToBase64 } from '@/shared/tensor';
 
 const SIZE = PREPROCESS.inputSize;
+const RENDER = SIZE * PREPROCESS.supersample; // e.g. 128
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
-/** Minimal ImageData shape so this is testable without a DOM. */
+/** Minimal ImageData shape so the tensor math is testable without a DOM. */
 export interface RGBAImage {
   width: number;
   height: number;
@@ -26,23 +33,55 @@ export interface RGBAImage {
 }
 
 /**
- * Pack an SIZE×SIZE RGBA image into a normalized NCHW Float32Array
- * ([1, 3, SIZE, SIZE]) using ImageNet mean/std. Pure + deterministic.
+ * RGBA (composited-over-white) image → normalized NCHW Float32Array
+ * [1,3,SIZE,SIZE]: weighted luminance → border polarity → (x-0.5)/0.5,
+ * replicated across 3 channels. Pure + deterministic.
  */
-export function packNCHW(img: RGBAImage): Float32Array {
+export function imageToTensor(img: RGBAImage): Float32Array {
   const { width: w, height: h, data } = img;
-  const out = new Float32Array(3 * h * w);
-  const { mean, std } = PREPROCESS;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const px = (y * w + x) * 4;
-      for (let c = 0; c < 3; c++) {
-        const v = (data[px + c] as number) / 255;
-        out[c * h * w + y * w + x] = (v - mean[c]) / std[c];
-      }
-    }
+  const n = w * h;
+  const lum = new Float32Array(n);
+  const [wr, wg, wb] = PREPROCESS.luminanceWeights;
+  for (let i = 0; i < n; i++) {
+    const p = i * 4;
+    lum[i] = wr * (data[p] as number) + wg * (data[p + 1] as number) + wb * (data[p + 2] as number);
+  }
+
+  // Polarity: make the border ring the light side.
+  if (PREPROCESS.autoPolarity && borderMean(lum, w, h) < PREPROCESS.polarityThreshold) {
+    for (let i = 0; i < n; i++) lum[i] = 255 - lum[i];
+  }
+
+  // Normalize once, then replicate identical luminance to all channels (NCHW).
+  const mean = PREPROCESS.mean[0];
+  const std = PREPROCESS.std[0];
+  const out = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) {
+    const v = (lum[i] / 255 - mean) / std;
+    out[i] = v;
+    out[n + i] = v;
+    out[2 * n + i] = v;
   }
   return out;
+}
+
+function borderMean(lum: Float32Array, w: number, h: number): number {
+  if (w < 2 || h < 2) {
+    let s = 0;
+    for (let i = 0; i < lum.length; i++) s += lum[i];
+    return s / lum.length;
+  }
+  let sum = 0;
+  let count = 0;
+  for (let x = 0; x < w; x++) {
+    sum += lum[x] + lum[(h - 1) * w + x]; // top + bottom rows
+    count += 2;
+  }
+  for (let y = 0; y < h; y++) {
+    sum += lum[y * w] + lum[y * w + (w - 1)]; // left + right cols
+    count += 2;
+  }
+  return sum / count;
 }
 
 function tensorFrom(arr: Float32Array): IconTensor {
@@ -54,15 +93,7 @@ function tensorFrom(arr: Float32Array): IconTensor {
   };
 }
 
-/** Render size to target — bigger than the canvas for crisp downscaling. */
-const RENDER_TARGET = 128;
-
-/**
- * Intrinsic SVG size in user units. Prefer viewBox (unit-agnostic), then numeric
- * width/height, then the rendered box, then a default. Many real icons set ONLY
- * a viewBox — and createImageBitmap throws on an SVG with no explicit pixel size,
- * which is exactly why inline SVGs must get width/height before rasterizing.
- */
+/** Intrinsic SVG size (viewBox → numeric w/h → bounding box → default). */
 export function getSvgRenderSize(svg: SVGElement): { w: number; h: number } {
   const vb = svg.getAttribute('viewBox');
   if (vb) {
@@ -81,36 +112,48 @@ export function getSvgRenderSize(svg: SVGElement): { w: number; h: number } {
   return { w: SIZE, h: SIZE };
 }
 
-/** Resolve currentColor and force explicit dimensions into a standalone SVG string. */
+/**
+ * Standalone SVG string: <use> inlined, currentColor → black, forced to a square
+ * RENDER×RENDER (the SVG's viewBox + preserveAspectRatio letterbox the art, just
+ * like the lab's normalize_svg_dimensions).
+ */
 function prepareSvgString(svg: SVGElement): string {
   const clone = svg.cloneNode(true) as SVGElement;
-  let color: string = PREPROCESS.foregroundFallback;
-  try {
-    const computed = svg.ownerDocument?.defaultView?.getComputedStyle(svg);
-    if (computed?.color) color = computed.color;
-  } catch {
-    /* fall back to default foreground */
-  }
-  // Inline <use> sprite geometry so the standalone SVG isn't blank.
   resolveUses(clone);
 
-  // currentColor in the markup resolves against the root `color`.
-  clone.setAttribute('color', color);
-  clone.style.color = color;
+  // currentColor → black (do NOT use the page color; the model never saw it).
+  clone.setAttribute('color', PREPROCESS.renderColor);
+  clone.style.color = PREPROCESS.renderColor;
 
   const { w, h } = getSvgRenderSize(svg);
-  // A viewBox is required for the content to scale to the new width/height.
   if (!clone.getAttribute('viewBox')) clone.setAttribute('viewBox', `0 0 ${w} ${h}`);
-  const k = RENDER_TARGET / Math.max(w, h);
-  clone.setAttribute('width', String(Math.max(1, Math.round(w * k))));
-  clone.setAttribute('height', String(Math.max(1, Math.round(h * k))));
-  if (!clone.getAttribute('xmlns')) {
-    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  }
+  clone.setAttribute('width', String(RENDER));
+  clone.setAttribute('height', String(RENDER));
+  if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', SVG_NS);
   return new XMLSerializer().serializeToString(clone);
 }
 
-/** Fallback for environments/SVGs where createImageBitmap(blob) is unreliable. */
+function fillWhite(ctx: OffscreenCanvasRenderingContext2D): void {
+  ctx.fillStyle = PREPROCESS.background;
+  ctx.fillRect(0, 0, SIZE, SIZE);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+}
+
+/** Contain-pad draw (preserve aspect) — for <img>, which has no preserveAspectRatio. */
+function drawContain(
+  ctx: OffscreenCanvasRenderingContext2D,
+  source: CanvasImageSource,
+  srcW: number,
+  srcH: number,
+): void {
+  if (srcW <= 0 || srcH <= 0) return;
+  const scale = Math.min(SIZE / srcW, SIZE / srcH);
+  const dw = Math.max(1, Math.round(srcW * scale));
+  const dh = Math.max(1, Math.round(srcH * scale));
+  ctx.drawImage(source, Math.floor((SIZE - dw) / 2), Math.floor((SIZE - dh) / 2), dw, dh);
+}
+
 function loadSvgImage(svgString: string): Promise<HTMLImageElement> {
   const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString);
   return new Promise((resolve, reject) => {
@@ -119,24 +162,6 @@ function loadSvgImage(svgString: string): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error('SVG image decode failed'));
     img.src = url;
   });
-}
-
-/** Draw a source onto a white SIZE×SIZE canvas, contain-padded, → ImageData. */
-function drawContain(
-  ctx: OffscreenCanvasRenderingContext2D,
-  source: CanvasImageSource,
-  srcW: number,
-  srcH: number,
-): void {
-  ctx.fillStyle = PREPROCESS.background;
-  ctx.fillRect(0, 0, SIZE, SIZE);
-  if (srcW <= 0 || srcH <= 0) return;
-  const scale = Math.min(SIZE / srcW, SIZE / srcH);
-  const dw = Math.max(1, Math.round(srcW * scale));
-  const dh = Math.max(1, Math.round(srcH * scale));
-  const dx = Math.floor((SIZE - dw) / 2);
-  const dy = Math.floor((SIZE - dh) / 2);
-  ctx.drawImage(source, dx, dy, dw, dh);
 }
 
 /**
@@ -152,6 +177,7 @@ export async function rasterizeIcon(
   if (!ctx) return null;
 
   try {
+    fillWhite(ctx);
     if (kind === 'img-svg') {
       const img = el as HTMLImageElement;
       const w = img.naturalWidth || img.width || SIZE;
@@ -161,21 +187,20 @@ export async function rasterizeIcon(
       const svg = el as unknown as SVGElement;
       const svgString = prepareSvgString(svg);
       try {
-        const blob = new Blob([svgString], { type: 'image/svg+xml' });
-        const bitmap = await createImageBitmap(blob);
-        drawContain(ctx, bitmap, bitmap.width || SIZE, bitmap.height || SIZE);
+        const bitmap = await createImageBitmap(
+          new Blob([svgString], { type: 'image/svg+xml' }),
+        );
+        // bitmap is RENDER×RENDER (square, art letterboxed) → fill the SIZE canvas.
+        ctx.drawImage(bitmap, 0, 0, SIZE, SIZE);
         bitmap.close();
       } catch {
-        // Some Chrome builds reject SVG blobs in createImageBitmap; the <img>
-        // data-URL path is more forgiving.
         const img = await loadSvgImage(svgString);
-        drawContain(ctx, img, img.naturalWidth || SIZE, img.naturalHeight || SIZE);
+        ctx.drawImage(img, 0, 0, SIZE, SIZE);
       }
     }
-    // getImageData throws (SecurityError) if the canvas is tainted by a
-    // cross-origin <img> SVG — caught below → null → skip classification.
+    // getImageData throws (SecurityError) if tainted by a cross-origin <img>.
     const imageData = ctx.getImageData(0, 0, SIZE, SIZE);
-    return tensorFrom(packNCHW(imageData));
+    return tensorFrom(imageToTensor(imageData));
   } catch (err) {
     console.debug('[icon-labeler] rasterize failed, skipping icon', err);
     return null;

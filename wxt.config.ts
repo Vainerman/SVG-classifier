@@ -4,6 +4,12 @@ import { defineConfig } from 'wxt';
 // shared logic in src/{shared,content,offscreen}. The `@` alias resolves to src/.
 export default defineConfig({
   srcDir: 'src',
+  // Select onnxruntime-web's "extern wasm" build so Vite does NOT also bundle a
+  // copy of the 13 MB .wasm into assets/. We ship + load it ourselves from ort/
+  // (scripts/copy-ort.mjs) via ort.env.wasm.wasmPaths.
+  vite: () => ({
+    resolve: { conditions: ['onnxruntime-web-use-extern-wasm'] },
+  }),
   // Bundled assets (the model label map) — copied to the output root, so
   // labels.json is reachable at chrome.runtime.getURL('models/labels.json').
   publicDir: 'src/public',
