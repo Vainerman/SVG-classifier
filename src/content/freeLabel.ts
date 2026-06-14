@@ -22,6 +22,10 @@ export interface FreeLabelResult {
   state: AccNameState;
   /** Present only for state === 'free-label'. */
   freeLabel?: string;
+  /** The existing accessible name a screen reader would announce, for the
+   *  'named' / 'named-by-ancestor' states. Informational only (debug "label
+   *  all" badge) — the do-no-harm decision still rides on `state`. */
+  existingName?: string;
 }
 
 export interface FreeLabelOptions {
@@ -170,17 +174,17 @@ export function computeAccNameState(
   if (tag === 'img' && el.getAttribute('alt') === '') return { state: 'hidden' };
 
   // 2. Already has its own accessible name.
-  if (ownName(el)) return { state: 'named' };
+  const own = ownName(el);
+  if (own) return { state: 'named', existingName: own };
 
   // 3. Inside an interactive ancestor that is already named by OTHER means →
   //    labeling the icon would double-speak.
   const ancestor = nearestInteractiveAncestor(el);
   if (ancestor) {
-    const ancestorHasName =
-      Boolean(ownName(ancestor)) ||
-      Boolean(visibleTextExcludingIcons(ancestor)) ||
-      hasOtherTitledIcon(ancestor, el);
-    if (ancestorHasName) return { state: 'named-by-ancestor' };
+    const ancestorName = ownName(ancestor) || visibleTextExcludingIcons(ancestor);
+    if (ancestorName || hasOtherTitledIcon(ancestor, el)) {
+      return { state: 'named-by-ancestor', existingName: ancestorName };
+    }
     // else: the icon is the control's only content → it SHOULD supply the name.
   }
 

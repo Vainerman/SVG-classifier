@@ -17,18 +17,23 @@ async function init(): Promise<void> {
   const settings = await getSettings();
   const enabled = $<HTMLInputElement>('enabled');
   const debugBadge = $<HTMLInputElement>('debugBadge');
+  const debugLabelAll = $<HTMLInputElement>('debugLabelAll');
   const attribution = $<HTMLSelectElement>('attribution');
   const threshold = $<HTMLInputElement>('threshold');
   const thresholdOut = $<HTMLOutputElement>('thresholdOut');
 
   enabled.checked = settings.enabled;
   debugBadge.checked = settings.debugBadge;
+  debugLabelAll.checked = settings.debugLabelAll;
   attribution.value = settings.attribution;
   threshold.value = String(settings.confidenceThreshold);
   thresholdOut.value = settings.confidenceThreshold.toFixed(2);
 
   enabled.addEventListener('change', () => setSettings({ enabled: enabled.checked }));
   debugBadge.addEventListener('change', () => setSettings({ debugBadge: debugBadge.checked }));
+  debugLabelAll.addEventListener('change', () =>
+    setSettings({ debugLabelAll: debugLabelAll.checked }),
+  );
   attribution.addEventListener('change', () =>
     setSettings({ attribution: attribution.value as AttributionMode }),
   );

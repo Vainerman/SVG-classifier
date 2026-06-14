@@ -36,6 +36,12 @@ h1 {
 .row.toggle {
   cursor: pointer;
 }
+.hint {
+  font-size: 11px;
+  line-height: 1.35;
+  color: #6b7280;
+  margin: -4px 0 9px;
+}
 .row select,
 .row input[type='range'] {
   flex: 0 0 auto;

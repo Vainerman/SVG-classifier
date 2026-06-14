@@ -72,6 +72,10 @@ export interface BehaviorSettings {
   useFreeLabelHints: boolean;
   /** Subtle on-screen outline+tooltip on labeled icons (aria-hidden). */
   debugBadge: boolean;
+  /** Debug: run the model on EVERY icon (incl. ones we normally skip) and show a
+   *  badge with the existing accessible name + the generated label. Visual only —
+   *  never writes aria onto already-named icons (do-no-harm is preserved). */
+  debugLabelAll: boolean;
   /** IndexedDB result-cache size cap (entries). */
   idbMaxEntries: number;
   /** Hosts (exact or subdomain) where the extension stays fully off — never
@@ -86,14 +90,15 @@ export interface BehaviorSettings {
 
 export const DEFAULT_BEHAVIOR: BehaviorSettings = {
   enabled: true,
-  // Model's recommended default (labels.json unknown.default_threshold). The
+  // Lowered to 0.1 to favor coverage (label more icons) over precision; the
   // model is mildly over-confident (ECE ~0.19), so this is a floor, not a calibration.
-  confidenceThreshold: 0.5,
+  confidenceThreshold: 0.1,
   attribution: 'suffix',
   attributionText: '(auto-labeled)',
   mockAttributionText: '(mock label)',
   useFreeLabelHints: true,
   debugBadge: MOCK_MODE, // on by default during the mock phase for sighted verification
+  debugLabelAll: false,
   idbMaxEntries: 10_000,
   siteDenylist: [],
   deferActivation: false,

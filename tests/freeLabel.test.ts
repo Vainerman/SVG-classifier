@@ -109,3 +109,37 @@ describe('computeAccNameState — do-no-harm', () => {
     ).toBe('named');
   });
 });
+
+describe('computeAccNameState — existingName (debug "label all")', () => {
+  it("exposes a named icon's own accessible name", () => {
+    expect(
+      computeAccNameState(el('<svg aria-label="Home"><path/></svg>'), opts).existingName,
+    ).toBe('Home');
+  });
+
+  it("exposes a <title>-named icon's name", () => {
+    expect(
+      computeAccNameState(el('<svg><title>Search</title><path/></svg>'), opts).existingName,
+    ).toBe('Search');
+  });
+
+  it("exposes the ancestor's name for a named-by-ancestor icon", () => {
+    const svg = el('<button aria-label="Go home"><svg><path/></svg></button>');
+    const r = computeAccNameState(svg, opts);
+    expect(r.state).toBe('named-by-ancestor');
+    expect(r.existingName).toBe('Go home');
+  });
+
+  it("exposes an ancestor's visible text for a named-by-ancestor icon", () => {
+    const svg = el('<button><svg><path/></svg> Submit</button>');
+    const r = computeAccNameState(svg, opts);
+    expect(r.state).toBe('named-by-ancestor');
+    expect(r.existingName).toBe('Submit');
+  });
+
+  it('is absent for genuinely unlabeled icons', () => {
+    expect(
+      computeAccNameState(el('<svg><path d="M0 0h4v4z"/></svg>'), opts).existingName,
+    ).toBeUndefined();
+  });
+});

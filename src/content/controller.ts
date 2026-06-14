@@ -35,6 +35,13 @@ interface PendingEntry {
   sample: Element;
 }
 
+interface NodeMeta {
+  /** Existing accessible name/tag, shown in the debug badge ('' if none). */
+  existing: string;
+  /** false = debug-only: show a badge but never write aria (do-no-harm). */
+  writeAria: boolean;
+}
+
 // Interaction events that cut a pending deferral short — the challenge has
 // almost certainly resolved once the user touches the page.
 const DEFER_INTERACTIONS = ['pointerdown', 'keydown', 'scroll'] as const;
@@ -50,6 +57,10 @@ export class Controller {
   /** Cancels a pending deferred start (timer + interaction listeners); null when idle. */
   private deferCleanup: (() => void) | null = null;
   private pending = new Map<string, PendingEntry>();
+  /** Per-node intent for a pending classification: the existing accessible name
+   *  (debug "label all" badge) and whether to write aria. Badge-only nodes
+   *  (writeAria=false) are visualized but never modified. */
+  private nodeMeta = new WeakMap<Element, NodeMeta>();
   private flushTimer: number | null = null;
   private stats: PipelineStats = {
     seen: 0,
@@ -73,7 +84,8 @@ export class Controller {
     const shouldRun = next.enabled && this.shouldRunHere();
     if (shouldRun && !running) this.enable();
     else if (!shouldRun && running) this.disable();
-    if (!next.debugBadge) badgeLayer.clear();
+    // Tear down badges only when BOTH debug visualizations are off.
+    if (!next.debugBadge && !next.debugLabelAll) badgeLayer.clear();
   }
 
   /** Off entirely on denylisted hosts — bail before touching the page DOM. */
@@ -130,10 +142,17 @@ export class Controller {
     const acc = computeAccNameState(el, {
       useFreeLabelHints: this.settings.useFreeLabelHints,
     });
+    const labelAll = this.settings.debugLabelAll;
 
+    // Icons we normally leave untouched. In debug "label all" we still classify
+    // them — badge-only — to show the model's guess next to the existing name.
     if (acc.state === 'hidden' || acc.state === 'named' || acc.state === 'named-by-ancestor') {
-      markSkipped(el);
       this.stats.skipped++;
+      if (labelAll) {
+        this.observe(el, acc.existingName ?? '');
+      } else {
+        markSkipped(el);
+      }
       return;
     }
 
@@ -152,6 +171,9 @@ export class Controller {
       };
       setCached(result);
       if (applyLabel(el, extracted.kind, result, this.settings)) this.stats.labeled++;
+      // In debug "label all", ALSO classify it badge-only so the adopted hint can
+      // be compared against the model — without touching the aria we just wrote.
+      if (labelAll) this.observe(el, acc.freeLabel);
       return;
     }
 
@@ -163,7 +185,30 @@ export class Controller {
       return;
     }
 
-    // Enqueue for batched classification (dedup by hash).
+    this.enqueue(el, extracted, { existing: '', writeAria: true });
+    this.scheduleFlush();
+  }
+
+  /** Debug "label all": classify an icon we won't modify, to badge existing vs
+   *  generated. Marks it handled so the scanner won't re-enqueue it. */
+  private observe(el: Element, existing: string): void {
+    const extracted = extractIcon(el);
+    // Mark handled so the scanner won't re-enqueue — but never clobber a sentinel
+    // a prior write already set (the free-label case keeps its real label value).
+    if (!isHandled(el)) markSkipped(el);
+    if (!extracted) return;
+    const cached = getCached(extracted.hash);
+    if (cached) {
+      badgeLayer.show(el, cached.label, cached, { existing, observed: true });
+      return;
+    }
+    this.enqueue(el, extracted, { existing, writeAria: false });
+    this.scheduleFlush();
+  }
+
+  /** Add a node to the pending batch (dedup by hash), recording its intent. */
+  private enqueue(el: Element, extracted: { hash: string; kind: IconKind }, meta: NodeMeta): void {
+    this.nodeMeta.set(el, meta);
     const entry = this.pending.get(extracted.hash);
     if (entry) {
       entry.nodes.add(el);
@@ -174,7 +219,6 @@ export class Controller {
         sample: el,
       });
     }
-    this.scheduleFlush();
   }
 
   private scheduleFlush(): void {
@@ -251,10 +295,24 @@ export class Controller {
   }
 
   private writeResult(el: Element, kind: IconKind, result: ClassifyResult): void {
+    const meta = this.nodeMeta.get(el);
+    this.nodeMeta.delete(el);
+
+    // Debug "label all": an icon we won't modify — badge only, no aria, no stats
+    // (it was already counted as skipped when discovered).
+    if (meta && !meta.writeAria) {
+      badgeLayer.show(el, result.label, result, { existing: meta.existing, observed: true });
+      return;
+    }
+
     // Abstain below threshold → no aria written (do-no-harm).
     if (result.label === 'unknown' || result.confidence < this.settings.confidenceThreshold) {
       markSkipped(el);
       this.stats.unknown++;
+      // Still surface the model's (below-threshold) guess when labeling all.
+      if (this.settings.debugLabelAll) {
+        badgeLayer.show(el, result.label, result, { existing: meta?.existing ?? '', observed: true });
+      }
       return;
     }
     if (applyLabel(el, kind, result, this.settings)) this.stats.labeled++;

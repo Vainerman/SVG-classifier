@@ -93,7 +93,9 @@ export function applyLabel(
 
   el.setAttribute(SENTINEL_ATTR, result.label);
 
-  if (settings.debugBadge) badgeLayer.show(el, display.badgeText, result);
+  if (settings.debugBadge || settings.debugLabelAll) {
+    badgeLayer.show(el, display.badgeText, result);
+  }
   return true;
 }
 
@@ -107,6 +109,14 @@ function injectTitle(svg: Element, name: string): void {
     svg.insertBefore(title, svg.firstChild);
   }
   title.textContent = name;
+}
+
+/** Small styled span for the badge (textContent — never innerHTML). */
+function span(cls: string, text: string): HTMLElement {
+  const s = document.createElement('span');
+  if (cls) s.className = cls;
+  s.textContent = text;
+  return s;
 }
 
 // ── Debug badge layer ────────────────────────────────────────────────────────
@@ -136,14 +146,32 @@ class BadgeLayer {
         padding:1px 5px;border-radius:0 4px 4px 0;white-space:nowrap;
         box-shadow:0 1px 3px rgba(0,0,0,.35);pointer-events:none;}
       .outline{position:fixed;border:1.5px dashed #7c3aed;border-radius:3px;
-        pointer-events:none;box-sizing:border-box;}`;
+        pointer-events:none;box-sizing:border-box;}
+      /* "observed" = debug label-all badge on an icon we did NOT modify. */
+      .badge.observed{background:#475569;}
+      .outline.observed{border-color:#94a3b8;}
+      .ex{opacity:.85;font-weight:500;}
+      .arrow{opacity:.7;padding:0 2px;}`;
     this.root.appendChild(style);
     window.addEventListener('scroll', this.scheduleReposition, true);
     window.addEventListener('resize', this.scheduleReposition, true);
     return this.root;
   }
 
-  show(el: Element, text: string, result: ClassifyResult): void {
+  /**
+   * Show/refresh the badge for an icon.
+   *  - `text` is the generated (model) label.
+   *  - `opts.existing` (debug "label all") is the icon's pre-existing accessible
+   *    name; rendered as "existing → generated" so the two can be compared.
+   *  - `opts.observed` styles the badge to signal we only inspected the icon and
+   *    did NOT write any aria onto it (do-no-harm).
+   */
+  show(
+    el: Element,
+    text: string,
+    result: ClassifyResult,
+    opts: { existing?: string; observed?: boolean } = {},
+  ): void {
     const root = this.ensureHost();
     let wrap = this.badges.get(el);
     if (!wrap) {
@@ -157,9 +185,19 @@ class BadgeLayer {
       root.appendChild(wrap);
       this.badges.set(el, wrap);
     }
+    const outline = wrap.querySelector('.outline') as HTMLElement;
     const badge = wrap.querySelector('.badge') as HTMLElement;
+    outline.classList.toggle('observed', Boolean(opts.observed));
+    badge.classList.toggle('observed', Boolean(opts.observed));
+
     const pct = Math.round(result.confidence * 100);
-    badge.textContent = `${text} · ${pct}%`;
+    // Build via DOM nodes (not innerHTML): `existing` is arbitrary page content.
+    badge.textContent = '';
+    if (opts.existing) {
+      badge.appendChild(span('ex', opts.existing));
+      badge.appendChild(span('arrow', '→'));
+    }
+    badge.appendChild(span('', `${text} · ${pct}%`));
     this.position(el, wrap);
   }
 
