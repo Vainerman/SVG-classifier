@@ -164,6 +164,58 @@ function loadSvgImage(svgString: string): Promise<HTMLImageElement> {
   });
 }
 
+/** Draw an SVG STRING (forced square + black) onto the SIZE canvas. */
+async function drawSvgString(
+  ctx: OffscreenCanvasRenderingContext2D,
+  svgString: string,
+): Promise<void> {
+  try {
+    const bitmap = await createImageBitmap(new Blob([svgString], { type: 'image/svg+xml' }));
+    ctx.drawImage(bitmap, 0, 0, SIZE, SIZE);
+    bitmap.close();
+  } catch {
+    const img = await loadSvgImage(svgString);
+    ctx.drawImage(img, 0, 0, SIZE, SIZE);
+  }
+}
+
+/**
+ * Recover the SVG markup behind an <img> so it can be rasterized through the
+ * robust square-forced path (drawing the <img> element itself draws blank when
+ * the SVG has no intrinsic width/height — most icon SVGs). Handles data: URIs
+ * (base64 + url-encoded) and same-origin URLs; returns null for cross-origin.
+ */
+export async function getSvgTextFromImg(img: HTMLImageElement): Promise<string | null> {
+  const src = img.getAttribute('src') ?? '';
+  if (src.startsWith('data:')) {
+    const comma = src.indexOf(',');
+    if (comma === -1) return null;
+    const meta = src.slice(5, comma);
+    const payload = src.slice(comma + 1);
+    try {
+      return meta.includes('base64') ? atob(payload) : decodeURIComponent(payload);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const res = await fetch(src); // same-origin; cross-origin throws → null
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
+/** Parse SVG markup into a (detached) SVGElement, or null. */
+function parseSvg(text: string): SVGElement | null {
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const root = doc.documentElement;
+  if (!root || root.tagName.toLowerCase() !== 'svg' || doc.querySelector('parsererror')) {
+    return null;
+  }
+  return root as unknown as SVGElement;
+}
+
 /**
  * Rasterize an icon to a tensor, or null if it can't be drawn (e.g. a tainted
  * cross-origin <img> SVG). Async: createImageBitmap / image decode.
@@ -178,26 +230,28 @@ export async function rasterizeIcon(
 
   try {
     fillWhite(ctx);
+
+    // Resolve an SVG element to render: inline/sprite use the live node; <img>
+    // recovers its source markup (drawing the <img> directly draws blank for
+    // SVGs without an intrinsic size).
+    let svgEl: SVGElement | null;
     if (kind === 'img-svg') {
       const img = el as HTMLImageElement;
-      const w = img.naturalWidth || img.width || SIZE;
-      const h = img.naturalHeight || img.height || SIZE;
-      drawContain(ctx, img, w, h);
-    } else {
-      const svg = el as unknown as SVGElement;
-      const svgString = prepareSvgString(svg);
-      try {
-        const bitmap = await createImageBitmap(
-          new Blob([svgString], { type: 'image/svg+xml' }),
-        );
-        // bitmap is RENDER×RENDER (square, art letterboxed) → fill the SIZE canvas.
-        ctx.drawImage(bitmap, 0, 0, SIZE, SIZE);
-        bitmap.close();
-      } catch {
-        const img = await loadSvgImage(svgString);
-        ctx.drawImage(img, 0, 0, SIZE, SIZE);
+      const text = await getSvgTextFromImg(img);
+      svgEl = text ? parseSvg(text) : null;
+      if (!svgEl) {
+        // Cross-origin / unparseable: best-effort draw the element itself.
+        // (Cross-origin taints the canvas → getImageData throws → graceful null.)
+        const w = img.naturalWidth || img.width || SIZE;
+        const h = img.naturalHeight || img.height || SIZE;
+        drawContain(ctx, img, w, h);
+        return tensorFrom(imageToTensor(ctx.getImageData(0, 0, SIZE, SIZE)));
       }
+    } else {
+      svgEl = el as unknown as SVGElement;
     }
+
+    await drawSvgString(ctx, prepareSvgString(svgEl));
     // getImageData throws (SecurityError) if tainted by a cross-origin <img>.
     const imageData = ctx.getImageData(0, 0, SIZE, SIZE);
     return tensorFrom(imageToTensor(imageData));

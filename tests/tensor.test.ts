@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { float32ToBase64, base64ToFloat32, checksumTensor } from '@/shared/tensor';
-import { imageToTensor, getSvgRenderSize, type RGBAImage } from '@/content/rasterize';
+import {
+  imageToTensor,
+  getSvgRenderSize,
+  getSvgTextFromImg,
+  type RGBAImage,
+} from '@/content/rasterize';
 
 describe('tensor base64 round-trip (chrome.runtime is JSON-only)', () => {
   it('survives encode → decode', () => {
@@ -66,6 +71,26 @@ describe('imageToTensor — luminance + polarity + normalize (lab parity)', () =
     expect(out[center]).toBeCloseTo(-1, 5);
     // border was black(0) → flipped to 255 → +1 (now light background)
     expect(out[0]).toBeCloseTo(1, 5);
+  });
+});
+
+describe('getSvgTextFromImg — recover <img> SVG source (the img-svg raster fix)', () => {
+  function img(src: string): HTMLImageElement {
+    const el = document.createElement('img');
+    el.setAttribute('src', src);
+    return el;
+  }
+
+  it('decodes a url-encoded data: URI (incl. %23 → #)', async () => {
+    const svg = "<svg xmlns='http://www.w3.org/2000/svg'><circle fill='#334155'/></svg>";
+    const src = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+    expect(await getSvgTextFromImg(img(src))).toBe(svg);
+  });
+
+  it('decodes a base64 data: URI', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>';
+    const src = 'data:image/svg+xml;base64,' + btoa(svg);
+    expect(await getSvgTextFromImg(img(src))).toBe(svg);
   });
 });
 
