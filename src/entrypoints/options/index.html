@@ -124,6 +124,33 @@
     </div>
 
     <div class="field">
+      <label for="safeModeSites">Safe-mode sites (one host per line)</label>
+      <textarea
+        id="safeModeSites"
+        rows="3"
+        placeholder="chatgpt.com"
+        style="
+          width: 100%;
+          box-sizing: border-box;
+          padding: 5px 7px;
+          border: 1px solid #d1d5db;
+          border-radius: 5px;
+          font: 13px/1.5 ui-monospace, monospace;
+          resize: vertical;
+        "
+      ></textarea>
+      <div class="hint">
+        On these hosts the extension classifies icons but <strong>never writes to
+        the page</strong>, so sites with continuous tamper monitors (e.g.
+        <code>chatgpt.com</code>) don't block you. To hear an icon's label, focus
+        it and press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> — the label is
+        spoken aloud (a second voice over your screen reader). Labels also appear
+        in the popup. Use this instead of fully disabling a site you still want
+        labeled.
+      </div>
+    </div>
+
+    <div class="field">
       <label
         ><input type="checkbox" id="deferActivation" /> Defer until the page
         settles</label

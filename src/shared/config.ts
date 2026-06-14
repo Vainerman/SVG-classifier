@@ -94,6 +94,12 @@ export interface BehaviorSettings {
   /** Hosts (exact or subdomain) where the extension stays fully off — never
    *  touches the DOM. Use for sites whose bot challenges we trip. See denylist.ts. */
   siteDenylist: string[];
+  /** Hosts where the extension runs in SAFE MODE: it classifies icons but NEVER
+   *  writes to the page (no aria, no badge), so continuous DOM-integrity monitors
+   *  (e.g. chatgpt.com) don't trip. Labels are spoken on demand via the safe-mode
+   *  hotkey and shown in the popup readout. A middle tier between normal and the
+   *  full denylist. */
+  safeModeSites: string[];
   /** Delay ALL activity (scan, same-origin SVG fetches, offscreen WASM load) until
    *  the page settles or the user first interacts, so invisible bot challenges
    *  resolve first. On by default — belt-and-suspenders on top of ephemeral mode's
@@ -119,6 +125,7 @@ export const DEFAULT_BEHAVIOR: BehaviorSettings = {
   debugLabelAll: false,
   idbMaxEntries: 10_000,
   siteDenylist: [],
+  safeModeSites: [],
   deferActivation: true,
   deferDelayMs: 3000,
   injectionMode: 'ephemeral',
@@ -135,6 +142,10 @@ export const BATCH = {
  *  (a WeakSet) so we leave no foreign attribute for integrity monitors to hash.
  *  Kept only as a defensive entry in extract.ts's volatile-attribute stripper. */
 export const SENTINEL_ATTR = 'data-icon-labeler';
+
+/** Safe-mode shortcut: focus an unlabeled icon control + press this to hear its
+ *  label spoken (no page write). Fixed for now; mirrored in the options page. */
+export const SAFE_MODE_HOTKEY_LABEL = 'Alt+Shift+I';
 
 /** chrome.storage.local key for BehaviorSettings. */
 export const STORAGE_KEY = 'iconLabeler.settings';

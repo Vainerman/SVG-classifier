@@ -24,7 +24,7 @@ import type {
   StatsResponse,
 } from '@/shared/messages';
 import { Scanner } from '@/content/scanner';
-import { isDenylisted } from '@/shared/denylist';
+import { isDenylisted, isHostInList } from '@/shared/denylist';
 import { computeAccNameState, resolveFocusTarget } from '@/content/freeLabel';
 import { extractIcon, type ExtractedIcon, type IconKind } from '@/content/extract';
 import { rasterizeIcon } from '@/content/rasterize';
@@ -58,9 +58,12 @@ const DEFER_LISTENER_OPTS: AddEventListenerOptions = {
 export class Controller {
   private settings!: BehaviorSettings;
   private scanner: Scanner | null = null;
-  /** Focus-driven on-demand injector (ephemeral mode). Lives for the page; armed
-   *  while the controller is active, disarmed (no writes) otherwise. */
+  /** Focus-driven on-demand injector. In normal mode it writes aria on focus; in
+   *  safe mode it speaks the focused icon's label on the hotkey (no page writes). */
   private ephemeral = new EphemeralInjector();
+  /** Whether the current run writes to the page ('normal') or never does ('safe').
+   *  Set when the scanner starts; drives delivery + the focusable-only gate. */
+  private activeMode: 'safe' | 'normal' = 'normal';
   /** Cancels a pending deferred start (timer + interaction listeners); null when idle. */
   private deferCleanup: (() => void) | null = null;
   private pending = new Map<string, PendingEntry>();
@@ -90,32 +93,36 @@ export class Controller {
   }
 
   private onSettings(next: BehaviorSettings): void {
-    const modeChanged = this.settings?.injectionMode !== next.injectionMode;
+    const prevKey = this.behaviorKey();
     this.settings = next;
-    // Re-evaluate against the new enabled flag AND a possibly-edited denylist.
-    const running = this.scanner !== null || this.deferCleanup !== null;
-    const shouldRun = next.enabled && this.shouldRunHere();
-    if (shouldRun && !running) this.enable();
-    else if (!shouldRun && running) this.disable();
-    else if (shouldRun && running && modeChanged) {
-      // Switching ephemeral⇄persistent: tear down, forget handled-state so every
-      // candidate is reconsidered under the new strategy, then rebuild.
+    const nextKey = this.behaviorKey();
+    if (prevKey !== nextKey) {
+      // Any change to the effective behavior (enabled, denylist, safe-mode list,
+      // or injection strategy) → tear down, forget handled-state so every
+      // candidate is reconsidered under the new mode, then rebuild.
       this.disable();
       resetHandled();
-      this.enable();
+      if (nextKey !== 'off') this.enable();
     }
     // Tear down badges only when BOTH debug visualizations are off.
     if (!next.debugBadge && !next.debugLabelAll) badgeLayer.clear();
   }
 
-  /** Off entirely on denylisted hosts — bail before touching the page DOM. */
-  private shouldRunHere(): boolean {
-    return !isDenylisted(location.hostname, this.settings.siteDenylist);
+  /** The effective behavior for this host, as a comparable key. 'off' = don't run
+   *  (disabled or denylisted); 'safe' = classify but never write (speak on hotkey);
+   *  'normal:<injectionMode>' = write labels (ephemeral or persistent). */
+  private behaviorKey(): 'off' | 'safe' | `normal:${BehaviorSettings['injectionMode']}` {
+    const s = this.settings;
+    if (!s?.enabled) return 'off';
+    const host = location.hostname;
+    if (isDenylisted(host, s.siteDenylist)) return 'off';
+    if (isHostInList(host, s.safeModeSites)) return 'safe';
+    return `normal:${s.injectionMode}`;
   }
 
   private enable(): void {
     if (this.scanner || this.deferCleanup) return;
-    if (!this.shouldRunHere()) return;
+    if (this.behaviorKey() === 'off') return;
     if (this.settings.deferActivation) this.deferStart();
     else this.startScanner();
   }
@@ -123,11 +130,14 @@ export class Controller {
   private startScanner(): void {
     this.clearDefer();
     if (this.scanner) return;
-    // Ephemeral mode processes eagerly (labels must be ready before the user can
-    // Tab to an off-screen control) and arms the focus-driven injector. Eager
-    // processing makes NO DOM writes, so it costs no footprint.
-    const eager = this.settings.injectionMode === 'ephemeral';
-    if (eager) this.ephemeral.arm();
+    this.activeMode = this.behaviorKey() === 'safe' ? 'safe' : 'normal';
+    // Safe mode and ephemeral mode both process eagerly (labels/registrations must
+    // be ready before the user can Tab to an off-screen control) and arm the
+    // injector — 'speak' for safe mode (hotkey, no writes), 'write' otherwise.
+    // Eager processing makes NO DOM writes, so it costs no footprint.
+    if (this.activeMode === 'safe') this.ephemeral.arm('speak');
+    else if (this.settings.injectionMode === 'ephemeral') this.ephemeral.arm('write');
+    const eager = this.activeMode === 'safe' || this.settings.injectionMode === 'ephemeral';
     // Fresh run → fresh readout.
     this.readout.clear();
     this.readoutTruncated = false;
@@ -224,10 +234,12 @@ export class Controller {
       return;
     }
 
-    // Ephemeral mode: don't even classify icons nobody can focus — focus-driven
-    // labeling can't reach them (they're Architecture B's job). Saves model work
-    // and keeps the DOM untouched. Debug "label all" still classifies everything.
-    if (this.settings.injectionMode === 'ephemeral' && !labelAll && !resolveFocusTarget(el)) {
+    // Focus-based delivery (ephemeral OR safe mode): don't even classify icons
+    // nobody can focus — neither the focus write nor the hotkey can reach them.
+    // Saves model work and keeps the DOM untouched. (Persistent mode labels every
+    // icon; debug "label all" classifies everything for the badge.)
+    const focusBased = this.activeMode === 'safe' || this.settings.injectionMode === 'ephemeral';
+    if (focusBased && !labelAll && !resolveFocusTarget(el)) {
       markHandled(el);
       this.stats.skipped++;
       return;
@@ -415,16 +427,24 @@ export class Controller {
     });
   }
 
-  /** Apply a label via the configured strategy. Persistent → write into the DOM
-   *  now; ephemeral → register for focus-driven injection. True if delivered. */
+  /** Apply a label via the active strategy. Safe → register for hotkey speech,
+   *  NO page write (incl. no badge); ephemeral → register for focus-driven aria;
+   *  persistent → write into the DOM now. True if delivered/registered. */
   private deliver(el: Element, kind: IconKind, result: ClassifyResult): boolean {
+    if (this.activeMode === 'safe') {
+      return this.deliverEphemeral(el, result, { silentBadge: true });
+    }
     if (this.settings.injectionMode === 'ephemeral') {
       return this.deliverEphemeral(el, result);
     }
     return applyLabel(el, kind, result, this.settings);
   }
 
-  private deliverEphemeral(el: Element, result: ClassifyResult): boolean {
+  private deliverEphemeral(
+    el: Element,
+    result: ClassifyResult,
+    opts: { silentBadge?: boolean } = {},
+  ): boolean {
     const target = resolveFocusTarget(el);
     if (!target) return false; // not keyboard-focusable → unreachable (Architecture B)
     const { accessibleName, badgeText } = composeLabel(result.label, this.settings);
@@ -432,7 +452,8 @@ export class Controller {
     // control (a <button>/<a> already carries the correct role).
     const needsRoleImg = target === el && el.tagName.toLowerCase() === 'svg';
     this.ephemeral.register(target, accessibleName, needsRoleImg);
-    if (this.settings.debugBadge || this.settings.debugLabelAll) {
+    // The debug badge is a page DOM write — suppress it in safe mode.
+    if (!opts.silentBadge && (this.settings.debugBadge || this.settings.debugLabelAll)) {
       badgeLayer.show(el, badgeText, result);
     }
     return true;

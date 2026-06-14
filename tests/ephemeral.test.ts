@@ -1,10 +1,23 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { EphemeralInjector } from '@/content/ephemeral';
 import { resolveFocusTarget } from '@/content/freeLabel';
 
 beforeEach(() => {
   document.body.innerHTML = '';
 });
+
+/** Dispatch the safe-mode hotkey (Alt+Shift+I) at an element. */
+function pressHotkey(el: Element): void {
+  el.dispatchEvent(
+    new KeyboardEvent('keydown', {
+      altKey: true,
+      shiftKey: true,
+      code: 'KeyI',
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
 
 describe('resolveFocusTarget', () => {
   it('resolves an icon-only <button> as the focus target', () => {
@@ -104,5 +117,73 @@ describe('EphemeralInjector — transient, focus-driven aria-label', () => {
     svg.blur();
     expect(svg.hasAttribute('role')).toBe(false);
     expect(svg.hasAttribute('aria-label')).toBe(false);
+  });
+});
+
+describe('EphemeralInjector — safe mode (speak, no page writes)', () => {
+  let speak: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    speak = vi.fn();
+    // jsdom has no Web Speech API — stub the bits the injector uses.
+    (window as unknown as { speechSynthesis: unknown }).speechSynthesis = {
+      speak,
+      cancel: vi.fn(),
+    };
+    (globalThis as unknown as { SpeechSynthesisUtterance: unknown }).SpeechSynthesisUtterance =
+      class {
+        text: string;
+        constructor(text: string) {
+          this.text = text;
+        }
+      };
+  });
+
+  it('writes NOTHING to the page on focus (safe mode never mutates the DOM)', () => {
+    document.body.innerHTML = '<button id="b"><svg><path/></svg></button>';
+    const btn = document.getElementById('b') as HTMLButtonElement;
+    const inj = new EphemeralInjector();
+    inj.register(btn, 'home (auto-labeled)', false);
+    inj.arm('speak');
+
+    btn.focus();
+    expect(btn.hasAttribute('aria-label')).toBe(false);
+    expect(btn.hasAttribute('role')).toBe(false);
+  });
+
+  it('speaks the focused icon\'s label on Alt+Shift+I', () => {
+    document.body.innerHTML = '<button id="b"><svg><path/></svg></button>';
+    const btn = document.getElementById('b') as HTMLButtonElement;
+    const inj = new EphemeralInjector();
+    inj.register(btn, 'home (auto-labeled)', false);
+    inj.arm('speak');
+
+    btn.focus();
+    pressHotkey(btn);
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(speak.mock.calls[0][0].text).toBe('home (auto-labeled)');
+  });
+
+  it('stays silent when the focused element is not a labeled icon', () => {
+    document.body.innerHTML = '<button id="b">Plain</button>';
+    const btn = document.getElementById('b') as HTMLButtonElement;
+    const inj = new EphemeralInjector();
+    inj.arm('speak'); // nothing registered for this button
+    btn.focus();
+    pressHotkey(btn);
+    expect(speak).not.toHaveBeenCalled();
+  });
+
+  it('does not speak after disarm', () => {
+    document.body.innerHTML = '<button id="b"><svg><path/></svg></button>';
+    const btn = document.getElementById('b') as HTMLButtonElement;
+    const inj = new EphemeralInjector();
+    inj.register(btn, 'home', false);
+    inj.arm('speak');
+    inj.disarm();
+
+    btn.focus();
+    pressHotkey(btn);
+    expect(speak).not.toHaveBeenCalled();
   });
 });

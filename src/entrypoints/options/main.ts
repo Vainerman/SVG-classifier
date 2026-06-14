@@ -22,6 +22,7 @@ async function init(): Promise<void> {
   const attributionText = $<HTMLInputElement>('attributionText');
   const idbMaxEntries = $<HTMLInputElement>('idbMaxEntries');
   const siteDenylist = $<HTMLTextAreaElement>('siteDenylist');
+  const safeModeSites = $<HTMLTextAreaElement>('safeModeSites');
   const deferActivation = $<HTMLInputElement>('deferActivation');
   const deferDelayMs = $<HTMLInputElement>('deferDelayMs');
 
@@ -30,6 +31,7 @@ async function init(): Promise<void> {
   attributionText.value = settings.attributionText;
   idbMaxEntries.value = String(settings.idbMaxEntries);
   siteDenylist.value = settings.siteDenylist.join('\n');
+  safeModeSites.value = settings.safeModeSites.join('\n');
   deferActivation.checked = settings.deferActivation;
   deferDelayMs.value = String(settings.deferDelayMs);
 
@@ -60,6 +62,15 @@ async function init(): Promise<void> {
       .filter(Boolean);
     siteDenylist.value = list.join('\n');
     await setSettings({ siteDenylist: list });
+    flashSaved();
+  });
+  safeModeSites.addEventListener('change', async () => {
+    const list = safeModeSites.value
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    safeModeSites.value = list.join('\n');
+    await setSettings({ safeModeSites: list });
     flashSaved();
   });
   deferActivation.addEventListener('change', async () => {

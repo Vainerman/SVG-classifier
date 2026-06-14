@@ -19,10 +19,19 @@
       <input type="checkbox" id="enabled" />
     </label>
 
-    <label class="row toggle" id="denylistRow" hidden>
-      <span>Disable on <strong id="denylistHost">this site</strong></span>
-      <input type="checkbox" id="denylistSite" />
+    <label class="row" id="siteModeRow" hidden>
+      <span>On <strong id="siteModeHost">this site</strong></span>
+      <select id="siteMode">
+        <option value="normal">Normal</option>
+        <option value="safe">Safe mode</option>
+        <option value="off">Disabled</option>
+      </select>
     </label>
+    <p class="hint" id="safeModeHint" hidden>
+      Classifies but never writes to the page (for sites that block tampering).
+      Focus an icon and press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> to hear
+      its label; labels also appear below.
+    </p>
 
     <label class="row toggle">
       <span>Debug badge (show labeled icons)</span>

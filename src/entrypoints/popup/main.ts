@@ -59,29 +59,37 @@ async function init(): Promise<void> {
     void refreshReadout();
   });
 
-  await initDenylistToggle();
+  await initSiteModeSelect();
   await refreshStats();
   await refreshReadout();
 }
 
-/** "Disable on this site": adds/removes the active tab's host in the denylist. */
-async function initDenylistToggle(): Promise<void> {
+/** Per-site mode for the active tab: Normal / Safe mode / Disabled. Maps to the
+ *  safeModeSites + siteDenylist lists (mutually exclusive for a given host). */
+async function initSiteModeSelect(): Promise<void> {
   const host = await activeTabHost();
   if (!host) return; // chrome://, extension pages, etc. — leave the row hidden.
 
-  $('denylistHost').textContent = host;
-  $('denylistRow').hidden = false;
+  $('siteModeHost').textContent = host;
+  $('siteModeRow').hidden = false;
 
-  const box = $<HTMLInputElement>('denylistSite');
-  const { siteDenylist } = await getSettings();
-  box.checked = siteDenylist.some((e) => normalizeDenylistEntry(e) === host);
+  const sel = $<HTMLSelectElement>('siteMode');
+  const hint = $('safeModeHint');
+  const has = (list: string[]) => list.some((e) => normalizeDenylistEntry(e) === host);
 
-  box.addEventListener('change', async () => {
-    const list = (await getSettings()).siteDenylist.filter(
-      (e) => normalizeDenylistEntry(e) !== host,
-    );
-    if (box.checked) list.push(host);
-    await setSettings({ siteDenylist: list });
+  const s = await getSettings();
+  sel.value = has(s.siteDenylist) ? 'off' : has(s.safeModeSites) ? 'safe' : 'normal';
+  hint.hidden = sel.value !== 'safe';
+
+  sel.addEventListener('change', async () => {
+    const cur = await getSettings();
+    // Drop this host from both lists, then add it to the chosen one (if any).
+    const siteDenylist = cur.siteDenylist.filter((e) => normalizeDenylistEntry(e) !== host);
+    const safeModeSites = cur.safeModeSites.filter((e) => normalizeDenylistEntry(e) !== host);
+    if (sel.value === 'off') siteDenylist.push(host);
+    else if (sel.value === 'safe') safeModeSites.push(host);
+    await setSettings({ siteDenylist, safeModeSites });
+    hint.hidden = sel.value !== 'safe';
   });
 }
 

@@ -38,32 +38,59 @@ interface Registered {
   needsRoleImg: boolean;
 }
 
+/**
+ * 'write' = normal ephemeral injection (focusin → aria-label → focusout removes).
+ * 'speak' = SAFE MODE: never touch the page; instead, on the safe-mode hotkey
+ *           (Alt+Shift+I), speak the focused icon's label via speechSynthesis.
+ *           For sites whose continuous integrity monitors catch even the
+ *           transient focus write (e.g. chatgpt.com).
+ */
+export type InjectorMode = 'write' | 'speak';
+
 export class EphemeralInjector {
   private targets = new WeakMap<Element, Registered>();
   /** The element we currently have a label injected on (for blur/disarm cleanup). */
   private active: { el: Element; addedRole: boolean } | null = null;
   private armed = false;
   private listening = false;
+  private mode: InjectorMode = 'write';
 
-  /** Remember the name a focusable control should announce when focused. */
+  /** Remember the name a focusable control should announce when focused/queried. */
   register(control: Element, name: string, needsRoleImg: boolean): void {
     this.targets.set(control, { name, needsRoleImg });
   }
 
-  /** Start reacting to focus. Idempotent; listeners attach once per page. */
-  arm(): void {
+  /** Start reacting. In 'write' mode, focus injects/strips aria; in 'speak' mode,
+   *  the hotkey speaks the focused icon's label and nothing touches the page. */
+  arm(mode: InjectorMode = 'write'): void {
     this.armed = true;
+    this.mode = mode;
     if (this.listening) return;
     this.listening = true;
-    document.addEventListener('focusin', this.onFocusIn, true);
-    document.addEventListener('focusout', this.onFocusOut, true);
+    if (mode === 'speak') {
+      document.addEventListener('keydown', this.onHotkey, true);
+    } else {
+      document.addEventListener('focusin', this.onFocusIn, true);
+      document.addEventListener('focusout', this.onFocusOut, true);
+    }
   }
 
-  /** Stop reacting and strip any currently-injected label. Listeners stay
-   *  attached (passive, they early-return) so re-arm is instant. */
+  /** Stop reacting: strip any injected label, cancel speech, remove listeners
+   *  (so a re-arm attaches the correct set for the new mode). */
   disarm(): void {
     this.armed = false;
     if (this.active) this.removeActive();
+    if (this.listening) {
+      document.removeEventListener('focusin', this.onFocusIn, true);
+      document.removeEventListener('focusout', this.onFocusOut, true);
+      document.removeEventListener('keydown', this.onHotkey, true);
+      this.listening = false;
+    }
+    try {
+      window.speechSynthesis?.cancel();
+    } catch {
+      /* speech unavailable */
+    }
   }
 
   private onFocusIn = (e: FocusEvent): void => {
@@ -98,4 +125,37 @@ export class EphemeralInjector {
     if (addedRole) el.removeAttribute('role');
     this.active = null;
   }
+
+  // ── Safe mode (speak) ──────────────────────────────────────────────────────
+
+  /** Alt+Shift+I (layout-independent via code) → speak the focused icon's label.
+   *  Reads document.activeElement (drilling into open shadow roots), looks it up
+   *  in the registry, and speaks — never touches the DOM. */
+  private onHotkey = (e: KeyboardEvent): void => {
+    if (!this.armed || this.mode !== 'speak') return;
+    if (!(e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyI')) return;
+    const el = deepActiveElement();
+    const reg = el ? this.targets.get(el) : undefined;
+    if (!reg) return; // focused thing isn't an icon we labeled → stay silent
+    e.preventDefault();
+    this.speak(reg.name);
+  };
+
+  private speak(name: string): void {
+    try {
+      const synth = window.speechSynthesis;
+      if (!synth) return;
+      synth.cancel(); // drop any queued utterance so rapid presses don't pile up
+      synth.speak(new SpeechSynthesisUtterance(name));
+    } catch {
+      /* speechSynthesis unavailable in this context */
+    }
+  }
+}
+
+/** The genuinely-focused element, descending through open shadow roots. */
+function deepActiveElement(): Element | null {
+  let el: Element | null = document.activeElement;
+  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+  return el;
 }

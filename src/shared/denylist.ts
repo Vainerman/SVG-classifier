@@ -48,6 +48,13 @@ function hostMatches(host: string, entry: string): boolean {
 export function isDenylisted(host: string, userList: readonly string[] = []): boolean {
   const h = host.toLowerCase();
   for (const e of BUILTIN_CHECKPOINT_HOSTS) if (hostMatches(h, e)) return true;
-  for (const raw of userList) if (hostMatches(h, normalizeDenylistEntry(raw))) return true;
+  return isHostInList(h, userList);
+}
+
+/** True if `host` matches any entry in `list` (exact host or subdomain). Used for
+ *  the safe-mode site list (and reused by the denylist). */
+export function isHostInList(host: string, list: readonly string[] = []): boolean {
+  const h = host.toLowerCase();
+  for (const raw of list) if (hostMatches(h, normalizeDenylistEntry(raw))) return true;
   return false;
 }

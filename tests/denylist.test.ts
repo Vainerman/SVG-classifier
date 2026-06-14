@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   isDenylisted,
+  isHostInList,
   normalizeDenylistEntry,
   BUILTIN_CHECKPOINT_HOSTS,
 } from '@/shared/denylist';
@@ -44,5 +45,17 @@ describe('isDenylisted', () => {
       expect(isDenylisted(host)).toBe(true);
     }
     expect(isDenylisted('challenges.cloudflare.com')).toBe(true);
+  });
+});
+
+describe('isHostInList (safe-mode matcher)', () => {
+  it('matches host + subdomains, normalizes entries, no built-ins', () => {
+    expect(isHostInList('chatgpt.com', ['chatgpt.com'])).toBe(true);
+    expect(isHostInList('app.chatgpt.com', ['chatgpt.com'])).toBe(true);
+    expect(isHostInList('chatgpt.com', ['https://ChatGPT.com/'])).toBe(true);
+    expect(isHostInList('notchatgpt.com', ['chatgpt.com'])).toBe(false);
+    expect(isHostInList('chatgpt.com', [])).toBe(false);
+    // Unlike isDenylisted, the built-in challenge hosts are NOT auto-included.
+    expect(isHostInList('challenges.cloudflare.com', [])).toBe(false);
   });
 });
