@@ -22,6 +22,7 @@ import type {
   StatsResponse,
 } from '@/shared/messages';
 import { Scanner } from '@/content/scanner';
+import { isDenylisted } from '@/shared/denylist';
 import { computeAccNameState } from '@/content/freeLabel';
 import { extractIcon, type IconKind } from '@/content/extract';
 import { rasterizeIcon } from '@/content/rasterize';
@@ -34,9 +35,20 @@ interface PendingEntry {
   sample: Element;
 }
 
+// Interaction events that cut a pending deferral short — the challenge has
+// almost certainly resolved once the user touches the page.
+const DEFER_INTERACTIONS = ['pointerdown', 'keydown', 'scroll'] as const;
+const DEFER_LISTENER_OPTS: AddEventListenerOptions = {
+  once: true,
+  passive: true,
+  capture: true,
+};
+
 export class Controller {
   private settings!: BehaviorSettings;
   private scanner: Scanner | null = null;
+  /** Cancels a pending deferred start (timer + interaction listeners); null when idle. */
+  private deferCleanup: (() => void) | null = null;
   private pending = new Map<string, PendingEntry>();
   private flushTimer: number | null = null;
   private stats: PipelineStats = {
@@ -55,20 +67,57 @@ export class Controller {
   }
 
   private onSettings(next: BehaviorSettings): void {
-    const wasEnabled = this.settings.enabled;
     this.settings = next;
-    if (next.enabled && !wasEnabled) this.enable();
-    else if (!next.enabled && wasEnabled) this.disable();
+    // Re-evaluate against the new enabled flag AND a possibly-edited denylist.
+    const running = this.scanner !== null || this.deferCleanup !== null;
+    const shouldRun = next.enabled && this.shouldRunHere();
+    if (shouldRun && !running) this.enable();
+    else if (!shouldRun && running) this.disable();
     if (!next.debugBadge) badgeLayer.clear();
   }
 
+  /** Off entirely on denylisted hosts — bail before touching the page DOM. */
+  private shouldRunHere(): boolean {
+    return !isDenylisted(location.hostname, this.settings.siteDenylist);
+  }
+
   private enable(): void {
+    if (this.scanner || this.deferCleanup) return;
+    if (!this.shouldRunHere()) return;
+    if (this.settings.deferActivation) this.deferStart();
+    else this.startScanner();
+  }
+
+  private startScanner(): void {
+    this.clearDefer();
     if (this.scanner) return;
     this.scanner = new Scanner((el) => this.onCandidate(el));
     this.scanner.start();
   }
 
+  /** Wait for the page to settle (delay or first interaction) before scanning,
+   *  so invisible bot challenges resolve before we mutate the DOM. */
+  private deferStart(): void {
+    const start = () => this.startScanner();
+    const timer = setTimeout(start, Math.max(0, this.settings.deferDelayMs)) as unknown as number;
+    for (const ev of DEFER_INTERACTIONS) {
+      window.addEventListener(ev, start, DEFER_LISTENER_OPTS);
+    }
+    this.deferCleanup = () => {
+      clearTimeout(timer);
+      for (const ev of DEFER_INTERACTIONS) {
+        window.removeEventListener(ev, start, DEFER_LISTENER_OPTS);
+      }
+      this.deferCleanup = null;
+    };
+  }
+
+  private clearDefer(): void {
+    this.deferCleanup?.();
+  }
+
   private disable(): void {
+    this.clearDefer();
     this.scanner?.stop();
     this.scanner = null;
     badgeLayer.clear();

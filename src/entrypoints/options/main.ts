@@ -20,10 +20,16 @@ async function init(): Promise<void> {
   const useFreeLabelHints = $<HTMLInputElement>('useFreeLabelHints');
   const attributionText = $<HTMLInputElement>('attributionText');
   const idbMaxEntries = $<HTMLInputElement>('idbMaxEntries');
+  const siteDenylist = $<HTMLTextAreaElement>('siteDenylist');
+  const deferActivation = $<HTMLInputElement>('deferActivation');
+  const deferDelayMs = $<HTMLInputElement>('deferDelayMs');
 
   useFreeLabelHints.checked = settings.useFreeLabelHints;
   attributionText.value = settings.attributionText;
   idbMaxEntries.value = String(settings.idbMaxEntries);
+  siteDenylist.value = settings.siteDenylist.join('\n');
+  deferActivation.checked = settings.deferActivation;
+  deferDelayMs.value = String(settings.deferDelayMs);
 
   useFreeLabelHints.addEventListener('change', async () => {
     await setSettings({ useFreeLabelHints: useFreeLabelHints.checked });
@@ -37,6 +43,25 @@ async function init(): Promise<void> {
     const n = Math.max(100, Number(idbMaxEntries.value) || 100);
     idbMaxEntries.value = String(n);
     await setSettings({ idbMaxEntries: n });
+    flashSaved();
+  });
+  siteDenylist.addEventListener('change', async () => {
+    const list = siteDenylist.value
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    siteDenylist.value = list.join('\n');
+    await setSettings({ siteDenylist: list });
+    flashSaved();
+  });
+  deferActivation.addEventListener('change', async () => {
+    await setSettings({ deferActivation: deferActivation.checked });
+    flashSaved();
+  });
+  deferDelayMs.addEventListener('change', async () => {
+    const n = Math.max(0, Number(deferDelayMs.value) || 0);
+    deferDelayMs.value = String(n);
+    await setSettings({ deferDelayMs: n });
     flashSaved();
   });
 

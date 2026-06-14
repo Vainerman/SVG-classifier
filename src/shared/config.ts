@@ -74,6 +74,14 @@ export interface BehaviorSettings {
   debugBadge: boolean;
   /** IndexedDB result-cache size cap (entries). */
   idbMaxEntries: number;
+  /** Hosts (exact or subdomain) where the extension stays fully off — never
+   *  touches the DOM. Use for sites whose bot challenges we trip. See denylist.ts. */
+  siteDenylist: string[];
+  /** Delay scanning until the page settles, so invisible bot challenges resolve
+   *  before we mutate the DOM. Off by default (adds label latency). */
+  deferActivation: boolean;
+  /** When deferActivation is on: ms to wait (or until first interaction) before scanning. */
+  deferDelayMs: number;
 }
 
 export const DEFAULT_BEHAVIOR: BehaviorSettings = {
@@ -87,6 +95,9 @@ export const DEFAULT_BEHAVIOR: BehaviorSettings = {
   useFreeLabelHints: true,
   debugBadge: MOCK_MODE, // on by default during the mock phase for sighted verification
   idbMaxEntries: 10_000,
+  siteDenylist: [],
+  deferActivation: false,
+  deferDelayMs: 3000,
 };
 
 /** Dedup/batch window: accumulate unique icons, then one batched classify call. */
