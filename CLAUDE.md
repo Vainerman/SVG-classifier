@@ -8,7 +8,15 @@ The full **extension side** is implemented and runs end-to-end against the **rea
 
 **Toolchain:** TypeScript + **WXT** (Vite/Rollup; chosen over CRXJS for first-class offscreen entrypoints) + Vitest/jsdom + **onnxruntime-web**. The model lab is PyTorch + `timm` under `lab/`.
 
-**Commands:** `npm run dev` (load unpacked from `.output/chrome-mv3`), `npm run build`, `npm run compile` (tsc), `npm test` (Vitest). `postinstall` runs `wxt prepare` **and `scripts/copy-ort.mjs`** (copies the ORT `.wasm`+`.mjs` runtime into `src/public/ort/`, gitignored, ~13 MB, reproducible from npm). The trained model IS committed (not reproducible without the lab).
+**Commands:** `npm run dev` (load unpacked from `.output/chrome-mv3`), `npm run build`, `npm run compile` (tsc), `npm test` (Vitest). `postinstall` runs `wxt prepare` **and `scripts/copy-ort.mjs`** (copies the ORT `.wasm`+`.mjs` runtime into `src/public/ort/`, gitignored, ~13 MB, reproducible from npm). The trained model IS committed (`src/public/models/`, ~7 MB **fp32**, not reproducible without the lab) — it is NOT gitignored. Only `src/public/ort/` (ORT runtime) and `lab/data/raw/` (192 MB icon corpus) are gitignored, and both regenerate.
+
+## Setup — route a fresh clone by intent (the user-facing `README.md` is the canonical setup doc)
+
+`README.md` is the public setup/usage doc; keep it and this file in sync. Three setup paths:
+
+- **Extension only** (most common — the model is committed, so no lab needed): `npm install` (postinstall fetches the ORT WASM) → `npm run dev` → load unpacked from `.output/chrome-mv3-dev`. Needs Node 18+ and Chrome 116+.
+- **Lab only** (re-collect data / retrain): `cd lab` → venv → `pip install -e ".[render-chromium,dev]"` → `playwright install chromium`. Re-collect data with `bash scripts/fetch_icons.sh` + `python scripts/build_provenance.py`. Train chain: `build_dataset.py → train.py → export.py → evaluate.py` (or `bash run_full_training.sh`); `scripts/smoke.py` proves wiring on a subsample. See `lab/TRAINING.md` + `lab/data/README.md`.
+- **Both / ship a new model:** retrain in the lab, then copy `lab/artifacts/model/{icon-classifier.onnx,labels.json}` → `src/public/models/` and bump `CONFIG_VERSION` if `preprocess.json` changed.
 
 **Train/serve parity is the #1 risk and is LOAD-BEARING.** `src/shared/config.ts` `PREPROCESS` mirrors `lab/artifacts/model/preprocess.json` byte-for-byte and `src/content/rasterize.ts` reproduces `lab/iconlab/preprocess.py`: render the SVG to a square (currentColor→**black**, supersample 2×), composite over white, **weighted luminance** (0.299/0.587/0.114), **border-ring polarity flip** (dark-mode invariance), resize to 64, replicate to 3 channels, normalize `(x-0.5)/0.5`. NOT RGB/ImageNet. Changing any value = retrain + re-export + bump `CONFIG_VERSION` (invalidates IDB cache). `config.test.ts` + `tensor.test.ts` pin this.
 
@@ -25,7 +33,7 @@ The full **extension side** is implemented and runs end-to-end against the **rea
 A **Manifest V3 Chrome extension** that detects icons (inline `<svg>`, `<img>`-of-SVG, `<use>` sprite refs) on any web page and overlays human-readable labels (house glyph → `home`). All inference is **fully on-device** — no network calls at inference time, the ONNX model is bundled. There are two distinct halves:
 
 1. The **extension** (`src/`, `public/models/`) — runtime detection, rasterization, inference plumbing, overlay UX.
-2. The **model fine-tuning lab** (not yet scaffolded) — data sourcing, taxonomy, training, ONNX export/quantization. See plan §5.
+2. The **model fine-tuning lab** (`lab/`, fully scaffolded and run) — data sourcing, taxonomy, training, ONNX export/quantization. See `lab/TRAINING.md` and plan §5.
 
 ## Architecture: the constraints that shape everything
 
@@ -43,16 +51,19 @@ These are the non-obvious decisions. Violating them breaks the project.
 
 - **`unknown` via confidence threshold.** Out-of-taxonomy icons are handled by abstaining below a threshold τ chosen from the risk–coverage curve — not by forcing a top-1 label. Whether `unknown` is also an explicit trained class is an open decision (plan §5.11).
 
-## Intended project structure (target, per plan §4.3)
+## Project structure (actual — see "Layout (WXT)" above for the live map)
+
+The plan's §4.3 target (`src/background/`, `src/ui/`) was realized under WXT's entrypoint
+convention; the real tree is:
 
 ```
 src/content/      DOM scan, SVG extract/normalize, hash, free-label, rasterize, overlay, per-tab cache
-src/background/   serviceWorker.ts — broker, offscreen mgmt, IndexedDB
-src/offscreen/    offscreen.html + inference.ts — ORT session, preprocess→infer→softmax
-src/shared/       messages.ts, hash.ts, config.ts (preprocessing!), idb.ts
-src/ui/           popup (on/off, threshold, stats)
-public/models/    icon-classifier.onnx (int8) + labels.json
-tests/            extract/rasterize unit tests + SVG fixtures
+src/entrypoints/  WXT entrypoints: background.ts (broker, offscreen mgmt, IndexedDB), content/, offscreen/, popup/, options/
+src/offscreen/    inference.ts (Classifier interface + Mock) + onnx.ts — ORT session, preprocess→infer→softmax
+src/shared/       config.ts (preprocessing!), messages.ts, settings.ts, denylist.ts, hash.ts, idb.ts, tensor.ts
+src/public/models/  icon-classifier.onnx (fp32, ~7 MB, committed) + labels.json
+src/public/ort/     onnxruntime-web WASM runtime (gitignored, copied on install)
+tests/            extract/rasterize unit tests + SVG fixtures + demo.html
 ```
 
 ## Phasing (plan §6)
