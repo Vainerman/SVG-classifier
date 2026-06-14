@@ -3,6 +3,7 @@
  * toggle, and live per-tab stats (queried from the active tab's content script).
  */
 import { MOCK_MODE, type AttributionMode } from '@/shared/config';
+import { normalizeDenylistEntry } from '@/shared/denylist';
 import { getSettings, setSettings } from '@/shared/settings';
 import type { PopupRequest, StatsResponse } from '@/shared/messages';
 
@@ -43,7 +44,41 @@ async function init(): Promise<void> {
     chrome.runtime.openOptionsPage();
   });
 
+  await initDenylistToggle();
   await refreshStats();
+}
+
+/** "Disable on this site": adds/removes the active tab's host in the denylist. */
+async function initDenylistToggle(): Promise<void> {
+  const host = await activeTabHost();
+  if (!host) return; // chrome://, extension pages, etc. — leave the row hidden.
+
+  $('denylistHost').textContent = host;
+  $('denylistRow').hidden = false;
+
+  const box = $<HTMLInputElement>('denylistSite');
+  const { siteDenylist } = await getSettings();
+  box.checked = siteDenylist.some((e) => normalizeDenylistEntry(e) === host);
+
+  box.addEventListener('change', async () => {
+    const list = (await getSettings()).siteDenylist.filter(
+      (e) => normalizeDenylistEntry(e) !== host,
+    );
+    if (box.checked) list.push(host);
+    await setSettings({ siteDenylist: list });
+  });
+}
+
+/** http(s) hostname of the active tab, or null when there's nothing to label. */
+async function activeTabHost(): Promise<string | null> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url) return null;
+    const url = new URL(tab.url);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.hostname : null;
+  } catch {
+    return null;
+  }
 }
 
 async function refreshStats(): Promise<void> {
