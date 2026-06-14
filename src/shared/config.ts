@@ -94,8 +94,10 @@ export interface BehaviorSettings {
   /** Hosts (exact or subdomain) where the extension stays fully off — never
    *  touches the DOM. Use for sites whose bot challenges we trip. See denylist.ts. */
   siteDenylist: string[];
-  /** Delay scanning until the page settles, so invisible bot challenges resolve
-   *  before we mutate the DOM. Off by default (adds label latency). */
+  /** Delay ALL activity (scan, same-origin SVG fetches, offscreen WASM load) until
+   *  the page settles or the user first interacts, so invisible bot challenges
+   *  resolve first. On by default — belt-and-suspenders on top of ephemeral mode's
+   *  no-DOM-writes guarantee; costs a little label latency. */
   deferActivation: boolean;
   /** When deferActivation is on: ms to wait (or until first interaction) before scanning. */
   deferDelayMs: number;
@@ -117,7 +119,7 @@ export const DEFAULT_BEHAVIOR: BehaviorSettings = {
   debugLabelAll: false,
   idbMaxEntries: 10_000,
   siteDenylist: [],
-  deferActivation: false,
+  deferActivation: true,
   deferDelayMs: 3000,
   injectionMode: 'ephemeral',
 };
