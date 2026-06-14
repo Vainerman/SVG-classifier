@@ -19,12 +19,14 @@ import type {
   ContentRequest,
   PipelineStats,
   PopupRequest,
+  ReadoutItem,
+  ReadoutResponse,
   StatsResponse,
 } from '@/shared/messages';
 import { Scanner } from '@/content/scanner';
 import { isDenylisted } from '@/shared/denylist';
 import { computeAccNameState, resolveFocusTarget } from '@/content/freeLabel';
-import { extractIcon, type IconKind } from '@/content/extract';
+import { extractIcon, type ExtractedIcon, type IconKind } from '@/content/extract';
 import { rasterizeIcon } from '@/content/rasterize';
 import { applyLabel, composeLabel, badgeLayer } from '@/content/overlay';
 import { isHandled, markHandled, resetHandled } from '@/content/handled';
@@ -67,6 +69,11 @@ export class Controller {
    *  (writeAria=false) are visualized but never modified. */
   private nodeMeta = new WeakMap<Element, NodeMeta>();
   private flushTimer: number | null = null;
+  /** Off-page readout for the popup: one renderable record per unique icon
+   *  (deduped by hash). Populated as we classify; never touches the page. */
+  private readout = new Map<string, ReadoutItem>();
+  private readoutTruncated = false;
+  private static readonly READOUT_CAP = 250;
   private stats: PipelineStats = {
     seen: 0,
     labeled: 0,
@@ -121,6 +128,9 @@ export class Controller {
     // processing makes NO DOM writes, so it costs no footprint.
     const eager = this.settings.injectionMode === 'ephemeral';
     if (eager) this.ephemeral.arm();
+    // Fresh run → fresh readout.
+    this.readout.clear();
+    this.readoutTruncated = false;
     this.scanner = new Scanner((el) => this.onCandidate(el), { eager });
     this.scanner.start();
   }
@@ -190,6 +200,14 @@ export class Controller {
       };
       setCached(result);
       markHandled(el);
+      this.noteReadout(extracted.hash, {
+        src: this.renderSrc(el, extracted),
+        kind: extracted.kind,
+        label: acc.freeLabel,
+        confidence: 1,
+        source: 'free-label',
+        state: 'labeled',
+      });
       if (this.deliver(el, extracted.kind, result)) this.stats.labeled++;
       // In debug "label all", ALSO classify it badge-only so the adopted hint can
       // be compared against the model — without touching the aria we just wrote.
@@ -201,6 +219,7 @@ export class Controller {
     const cached = getCached(extracted.hash);
     if (cached) {
       this.stats.cacheHits++;
+      this.noteReadout(extracted.hash, { src: this.renderSrc(el, extracted), kind: extracted.kind });
       this.writeResult(el, extracted.kind, cached);
       return;
     }
@@ -214,6 +233,11 @@ export class Controller {
       return;
     }
 
+    this.noteReadout(extracted.hash, {
+      src: this.renderSrc(el, extracted),
+      kind: extracted.kind,
+      state: 'pending',
+    });
     this.enqueue(el, extracted, { existing: '', writeAria: true });
     this.scheduleFlush();
   }
@@ -337,6 +361,12 @@ export class Controller {
     if (result.label === 'unknown' || result.confidence < this.settings.confidenceThreshold) {
       markHandled(el);
       this.stats.unknown++;
+      this.noteReadout(result.hash, {
+        label: result.label,
+        confidence: result.confidence,
+        source: result.source,
+        state: 'low',
+      });
       // Still surface the model's (below-threshold) guess when labeling all.
       if (this.settings.debugLabelAll) {
         badgeLayer.show(el, result.label, result, { existing: meta?.existing ?? '', observed: true });
@@ -344,7 +374,45 @@ export class Controller {
       return;
     }
     markHandled(el);
+    this.noteReadout(result.hash, {
+      label: result.label,
+      confidence: result.confidence,
+      source: result.source,
+      state: 'labeled',
+    });
     if (this.deliver(el, kind, result)) this.stats.labeled++;
+  }
+
+  /** Renderable image source for the popup readout: a self-contained data: URI
+   *  for inline/sprite SVG (canonical already has <use> inlined), or the original
+   *  src for an <img>. Used only for the off-page popup view. */
+  private renderSrc(el: Element, extracted: ExtractedIcon): string {
+    if (extracted.kind === 'img-svg') {
+      return (el as HTMLImageElement).getAttribute('src') ?? '';
+    }
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(extracted.canonical);
+  }
+
+  /** Insert-or-merge a readout record (deduped by hash). Capped to bound the
+   *  message size; sets the truncation flag once full. */
+  private noteReadout(hash: string, patch: Partial<ReadoutItem>): void {
+    const existing = this.readout.get(hash);
+    if (existing) {
+      this.readout.set(hash, { ...existing, ...patch });
+      return;
+    }
+    if (this.readout.size >= Controller.READOUT_CAP) {
+      this.readoutTruncated = true;
+      return;
+    }
+    this.readout.set(hash, {
+      src: patch.src ?? '',
+      kind: patch.kind ?? 'inline-svg',
+      label: patch.label ?? '',
+      confidence: patch.confidence ?? 0,
+      source: patch.source ?? '',
+      state: patch.state ?? 'pending',
+    });
   }
 
   /** Apply a label via the configured strategy. Persistent → write into the DOM
@@ -372,9 +440,15 @@ export class Controller {
 
   private listenForStatsRequests(): void {
     chrome.runtime.onMessage.addListener(
-      (msg: PopupRequest, _sender, sendResponse: (r: StatsResponse) => void) => {
+      (msg: PopupRequest, _sender, sendResponse: (r: StatsResponse | ReadoutResponse) => void) => {
         if (msg?.type === 'GET_STATS' && msg.target === 'content') {
           sendResponse({ stats: this.stats });
+        } else if (msg?.type === 'GET_READOUT' && msg.target === 'content') {
+          sendResponse({
+            stats: this.stats,
+            items: [...this.readout.values()],
+            truncated: this.readoutTruncated,
+          });
         }
         // Not returning true: synchronous response, channel closes immediately.
       },

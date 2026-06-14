@@ -64,8 +64,39 @@ export interface OffscreenClassifyResponse {
 /** Broadcast by the offscreen doc once the (mock) classifier is loaded. */
 export type OffscreenBroadcast = { type: 'OFFSCREEN_READY'; target: 'background' };
 
-// ── popup → active-tab content script (stats) ────────────────────────────────
-export type PopupRequest = { type: 'GET_STATS'; target: 'content' };
+// ── popup → active-tab content script (stats + icon readout) ─────────────────
+export type PopupRequest =
+  | { type: 'GET_STATS'; target: 'content' }
+  | { type: 'GET_READOUT'; target: 'content' };
+
+/** Mirrors content/extract.ts IconKind (inlined to keep shared/ free of content deps). */
+export type IconRenderKind = 'inline-svg' | 'sprite-svg' | 'img-svg';
+
+/**
+ * One detected icon, for the popup's off-page readout. `src` is renderable in an
+ * `<img>` (a `data:image/svg+xml` URI for inline/sprite SVG; the original `src`
+ * for `<img>`-of-SVG) — SVG in an `<img>` can't execute script, so it's safe to
+ * show page-derived markup in the privileged popup. Showing this in extension UI
+ * means we verify what the model sees WITHOUT touching the page DOM.
+ */
+export interface ReadoutItem {
+  src: string;
+  kind: IconRenderKind;
+  /** Predicted/adopted label; '' while still pending classification. */
+  label: string;
+  confidence: number;
+  /** 'model' | 'cache' | 'free-label'. */
+  source: string;
+  /** 'labeled' = delivered name; 'low' = below threshold (no aria); 'pending'. */
+  state: 'labeled' | 'low' | 'pending';
+}
+
+export interface ReadoutResponse {
+  stats: PipelineStats;
+  items: ReadoutItem[];
+  /** True if more icons were detected than the readout cap. */
+  truncated: boolean;
+}
 
 export interface PipelineStats {
   /** Candidate icons discovered. */

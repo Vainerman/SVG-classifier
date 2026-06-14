@@ -5,7 +5,12 @@
 import { MOCK_MODE, type AttributionMode } from '@/shared/config';
 import { normalizeDenylistEntry } from '@/shared/denylist';
 import { getSettings, setSettings } from '@/shared/settings';
-import type { PopupRequest, StatsResponse } from '@/shared/messages';
+import type {
+  PopupRequest,
+  ReadoutItem,
+  ReadoutResponse,
+  StatsResponse,
+} from '@/shared/messages';
 
 function $<T extends HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
@@ -49,8 +54,14 @@ async function init(): Promise<void> {
     chrome.runtime.openOptionsPage();
   });
 
+  $('readoutRefresh').addEventListener('click', () => {
+    void refreshStats();
+    void refreshReadout();
+  });
+
   await initDenylistToggle();
   await refreshStats();
+  await refreshReadout();
 }
 
 /** "Disable on this site": adds/removes the active tab's host in the denylist. */
@@ -101,6 +112,74 @@ async function refreshStats(): Promise<void> {
     $('statUnknown').textContent = String(stats.unknown);
   } catch {
     // No content script on this page (e.g. chrome:// or the page isn't ready).
+  }
+}
+
+/** Pull the off-page icon readout (icon image + label) from the content script
+ *  and render it in the popup. Nothing here touches the inspected page. */
+async function refreshReadout(): Promise<void> {
+  const list = $('readoutList');
+  const empty = $('readoutEmpty');
+  const trunc = $('readoutTrunc');
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    const req: PopupRequest = { type: 'GET_READOUT', target: 'content' };
+    const resp = (await chrome.tabs.sendMessage(tab.id, req)) as ReadoutResponse | undefined;
+    if (!resp) return;
+
+    renderReadout(resp.items);
+    const has = resp.items.length > 0;
+    list.hidden = !has;
+    empty.hidden = has;
+    if (resp.truncated) {
+      trunc.hidden = false;
+      trunc.textContent = `Showing the first ${resp.items.length} icons (more were detected).`;
+    } else {
+      trunc.hidden = true;
+    }
+  } catch {
+    // No content script on this page.
+  }
+}
+
+function renderReadout(items: ReadoutItem[]): void {
+  const list = $('readoutList');
+  list.textContent = '';
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = `ricon ${item.state}`;
+
+    const thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    const img = document.createElement('img');
+    // SVG loaded via <img> cannot execute scripts, so page-derived markup is safe
+    // to render here. src is set as a property (never innerHTML).
+    img.src = item.src;
+    img.alt = '';
+    img.loading = 'lazy';
+    thumb.appendChild(img);
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const lbl = document.createElement('div');
+    lbl.className = 'lbl';
+    lbl.textContent =
+      item.label || (item.state === 'pending' ? '…classifying' : 'unlabeled');
+    const sub = document.createElement('div');
+    sub.className = 'sub';
+    sub.textContent = `${item.kind.replace('-svg', '')} · ${item.source || '—'}`;
+    meta.appendChild(lbl);
+    meta.appendChild(sub);
+
+    const conf = document.createElement('div');
+    conf.className = 'conf';
+    conf.textContent = item.state === 'pending' ? '' : `${Math.round(item.confidence * 100)}%`;
+
+    row.appendChild(thumb);
+    row.appendChild(meta);
+    row.appendChild(conf);
+    list.appendChild(row);
   }
 }
 

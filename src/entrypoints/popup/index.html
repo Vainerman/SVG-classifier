@@ -60,6 +60,19 @@
       <div><strong id="statUnknown">0</strong><span>unknown</span></div>
     </section>
 
+    <section class="readout" aria-label="Detected icons on this tab">
+      <div class="readout-head">
+        <span>Detected icons</span>
+        <button id="readoutRefresh" type="button">Refresh</button>
+      </div>
+      <div id="readoutList" class="readout-list" hidden></div>
+      <p class="hint" id="readoutEmpty">
+        No icons captured yet — open a page with icons, then Refresh. Rendered
+        here in the popup only; nothing is written to the page.
+      </p>
+      <p class="hint" id="readoutTrunc" hidden></p>
+    </section>
+
     <footer>
       <a id="optionsLink" href="#">Advanced settings</a>
       <span class="privacy">100% on-device · no network</span>
